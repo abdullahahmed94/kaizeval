@@ -1,0 +1,16 @@
+Kaizeval
+Copyright 2026 Abdullah Jebril
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The Kaizeval name and logo are not licensed under the Apache License; see section 6
+("Trademarks") of the license.
+
+Third-party software
+--------------------
+Kaizeval depends on third-party open-source packages that are installed separately and remain
+under their own licenses. The list and licenses of the Python dependencies are recorded in
+docs/THIRD_PARTY_LICENSES.md, and those of the web console in web/package.json.
+
+The sample knowledge documents under src/kaizeval/sample_agent/kb describe a fictional company
+and were written for this project.

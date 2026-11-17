@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kaizeval"
+version = "0.1.0"
+description = "Evaluate, diagnose and safely optimize AI agents. Self-hosted, offline-capable, evidence-based."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10"
+keywords = ["ai-agents", "llm", "evaluation", "rag", "testing", "a-b-testing", "self-hosted"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Testing",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "sqlalchemy>=2.0",
+  "alembic>=1.13",
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+  "httpx>=0.27",
+  "pyjwt>=2.8",
+  "cryptography>=42",
+  "pypdf>=4.0",
+  "python-docx>=1.1",
+  "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+s3 = ["boto3>=1.34"]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.4",
+  "mypy>=1.10",
+  "pip-licenses>=4.4",
+]
+
+[project.scripts]
+kaizeval = "kaizeval.cli:main"
+
+[tool.hatch.build]
+# The built web console is git-ignored; "artifacts" makes hatch ship it anyway.
+artifacts = ["src/kaizeval/webui/**"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kaizeval"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "README.md", "LICENSE", "NOTICE", "CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["B008", "S101", "S311", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
+"src/kaizeval/migrations/*" = ["E", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/kaizeval"]
+exclude = ["migrations/"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true

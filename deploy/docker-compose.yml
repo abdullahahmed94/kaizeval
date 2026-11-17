@@ -1,0 +1,97 @@
+# Kaizeval self-hosted stack: API + console, background worker, PostgreSQL.
+#
+#   cp .env.example .env        # set POSTGRES_PASSWORD and KAIZEVAL_SECRET_KEY
+#   docker compose -f deploy/docker-compose.yml --env-file .env up -d --build
+#   open http://127.0.0.1:8000
+#
+# Optional profiles:
+#   --profile demo   adds the bundled deterministic sample agent (http://sample-agent:8101)
+#   --profile s3     adds MinIO and stores uploaded files there instead of the shared volume
+#
+# For a network-isolated installation add the override file:
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.offline.yml ...
+
+name: kaizeval
+
+x-kaizeval: &kaizeval
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  image: kaizeval:0.1.0
+  restart: unless-stopped
+  environment: &kaizeval-env
+    KAIZEVAL_DATABASE_URL: postgresql+psycopg://kaizeval:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/kaizeval
+    KAIZEVAL_SECRET_KEY: ${KAIZEVAL_SECRET_KEY:?set KAIZEVAL_SECRET_KEY in .env}
+    KAIZEVAL_OFFLINE: ${KAIZEVAL_OFFLINE:-true}
+    KAIZEVAL_EGRESS_ALLOWLIST: ${KAIZEVAL_EGRESS_ALLOWLIST:-}
+    KAIZEVAL_ALLOW_SIGNUP: ${KAIZEVAL_ALLOW_SIGNUP:-true}
+    KAIZEVAL_WORKER_MODE: external
+    KAIZEVAL_STORAGE_BACKEND: ${KAIZEVAL_STORAGE_BACKEND:-filesystem}
+    KAIZEVAL_S3_ENDPOINT_URL: ${KAIZEVAL_S3_ENDPOINT_URL:-http://minio:9000}
+    KAIZEVAL_S3_BUCKET: ${KAIZEVAL_S3_BUCKET:-kaizeval}
+    KAIZEVAL_S3_ACCESS_KEY: ${KAIZEVAL_S3_ACCESS_KEY:-}
+    KAIZEVAL_S3_SECRET_KEY: ${KAIZEVAL_S3_SECRET_KEY:-}
+    KAIZEVAL_LOG_LEVEL: ${KAIZEVAL_LOG_LEVEL:-INFO}
+  volumes:
+    - data:/data
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kaizeval
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: kaizeval
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kaizeval -d kaizeval"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *kaizeval
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${KAIZEVAL_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    <<: *kaizeval
+    command: ["kaizeval", "worker"]
+    depends_on:
+      api:
+        condition: service_healthy   # the API applies database migrations first
+
+  sample-agent:
+    <<: *kaizeval
+    profiles: ["demo"]
+    command: ["kaizeval", "sample-agent", "--host", "0.0.0.0", "--port", "8101", "--state-file", "/data/sample-agent-state.json"]
+    environment:
+      SAMPLE_AGENT_ADMIN_TOKEN: ${SAMPLE_AGENT_ADMIN_TOKEN:?set SAMPLE_AGENT_ADMIN_TOKEN in .env to use the demo profile}
+    depends_on: []
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["s3"]
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${KAIZEVAL_S3_ACCESS_KEY:-}
+      MINIO_ROOT_PASSWORD: ${KAIZEVAL_S3_SECRET_KEY:-}
+    volumes:
+      - minio:/data
+
+volumes:
+  pgdata:
+  data:
+  minio:

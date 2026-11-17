@@ -1,0 +1,81 @@
+name: Kaizeval quality gate
+description: Run a Kaizeval regression evaluation against your agent and fail the workflow when quality drops.
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  url:
+    description: Base URL of your Kaizeval instance (must be reachable from the runner).
+    required: true
+  workspace:
+    description: Workspace id.
+    required: true
+  agent:
+    description: Agent id.
+    required: true
+  dataset:
+    description: Dataset id (its regression split is used; the sealed holdout is never touched).
+    required: true
+  token:
+    description: Access token. Alternatively provide email and password.
+    required: false
+    default: ""
+  email:
+    description: Account email (used when no token is given).
+    required: false
+    default: ""
+  password:
+    description: Account password (used when no token is given). Pass it from a repository secret.
+    required: false
+    default: ""
+  mode:
+    description: Evaluation mode - deterministic, single or dual.
+    required: false
+    default: deterministic
+  agent-version:
+    description: Agent version to evaluate (baseline or a candidate id).
+    required: false
+    default: baseline
+  fail-under:
+    description: Minimum overall score between 0 and 1.
+    required: false
+    default: "0.8"
+  max-critical:
+    description: Maximum number of critical failures allowed.
+    required: false
+    default: "0"
+  baseline-run:
+    description: Optional run id to compare with; a statistically significant regression fails the gate.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install Kaizeval
+      shell: bash
+      run: python -m pip install --quiet "${{ github.action_path }}"
+    - name: Run the quality gate
+      shell: bash
+      env:
+        KAIZEVAL_TOKEN: ${{ inputs.token }}
+        KAIZEVAL_EMAIL: ${{ inputs.email }}
+        KAIZEVAL_PASSWORD: ${{ inputs.password }}
+        KZ_URL: ${{ inputs.url }}
+        KZ_WORKSPACE: ${{ inputs.workspace }}
+        KZ_AGENT: ${{ inputs.agent }}
+        KZ_DATASET: ${{ inputs.dataset }}
+        KZ_MODE: ${{ inputs.mode }}
+        KZ_VERSION: ${{ inputs.agent-version }}
+        KZ_FAIL_UNDER: ${{ inputs.fail-under }}
+        KZ_MAX_CRITICAL: ${{ inputs.max-critical }}
+        KZ_BASELINE_RUN: ${{ inputs.baseline-run }}
+      run: |
+        args=(--url "$KZ_URL" --workspace "$KZ_WORKSPACE" --agent "$KZ_AGENT" --dataset "$KZ_DATASET"
+              --mode "$KZ_MODE" --agent-version "$KZ_VERSION" --fail-under "$KZ_FAIL_UNDER" --max-critical "$KZ_MAX_CRITICAL")
+        if [ -n "$KZ_BASELINE_RUN" ]; then args+=(--baseline-run "$KZ_BASELINE_RUN"); fi
+        kaizeval ci "${args[@]}"

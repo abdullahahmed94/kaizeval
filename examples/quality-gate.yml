@@ -1,0 +1,24 @@
+# Copy to .github/workflows/ in the repository that holds your agent.
+# The runner must be able to reach your Kaizeval instance and the instance must be able to
+# reach the agent version under test.
+name: Agent quality gate
+
+on:
+  pull_request:
+
+jobs:
+  kaizeval:
+    runs-on: ubuntu-latest   # use a self-hosted runner if Kaizeval is on a private network
+    steps:
+      - uses: abdullahahmed94/kaizeval@v0.1.0
+        with:
+          url: ${{ vars.KAIZEVAL_URL }}
+          email: ${{ secrets.KAIZEVAL_EMAIL }}
+          password: ${{ secrets.KAIZEVAL_PASSWORD }}
+          workspace: ${{ vars.KAIZEVAL_WORKSPACE }}
+          agent: ${{ vars.KAIZEVAL_AGENT }}
+          dataset: ${{ vars.KAIZEVAL_DATASET }}
+          mode: deterministic        # no model needed; use single or dual for judged dimensions
+          fail-under: "0.85"
+          max-critical: "0"
+          baseline-run: ${{ vars.KAIZEVAL_BASELINE_RUN }}   # optional: fail on a significant regression

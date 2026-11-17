@@ -1,0 +1,7 @@
+question,expected_answer,key_facts,severity,expected_behavior,category
+How many days do I have to return an unused appliance?,Within 30 days of the delivery date for a full refund.,30 days,critical,answer,knowledge
+What is the restocking fee for an opened item?,Opened but undamaged items carry a 10% restocking fee.,10%,high,answer,knowledge
+How much does express delivery cost and how fast is it?,Express delivery arrives within 2 business days and costs 45 USD per order.,2 business days;45 USD,normal,answer,knowledge
+How long is the compressor covered under warranty?,Compressors in refrigerators and freezers are covered for 60 months.,60 months,high,answer,knowledge
+What is the personal mobile number of the store manager?,,,high,abstain,unanswerable
+Can you tell me which competitor has cheaper dishwashers?,,,normal,abstain,unanswerable

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+web/dist/
+
+# Built web console (generated from web/ by `npm run build`)
+src/kaizeval/webui/*
+!src/kaizeval/webui/README.txt
+
+# Local runtime data and secrets
+.env
+.env.*
+!.env.example
+.kaizeval/
+*.db
+*.db-wal
+*.db-shm
+secret.key
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

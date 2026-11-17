@@ -1,0 +1,62 @@
+# Network-isolated override.
+#
+# All Kaizeval containers are attached only to an *internal* Docker network, which has no route
+# to the outside. A small reverse proxy is the single container that also sits on a normal
+# network, and it only forwards inbound requests to the API. This adds a network-layer barrier
+# on top of the application-level egress policy (KAIZEVAL_OFFLINE=true).
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.offline.yml \
+#       --env-file .env up -d
+#
+# Images must already be present on the host (docker load) because nothing can be pulled.
+# A local model server has to live on the same internal network. The optional `ollama` profile
+# starts one; its model files must be provisioned in the `ollama` volume beforehand.
+
+services:
+  postgres:
+    networks: [isolated]
+
+  api:
+    networks: [isolated]
+    ports: !reset []
+    environment:
+      KAIZEVAL_OFFLINE: "true"
+
+  worker:
+    networks: [isolated]
+    environment:
+      KAIZEVAL_OFFLINE: "true"
+
+  sample-agent:
+    networks: [isolated]
+
+  minio:
+    networks: [isolated]
+
+  proxy:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [isolated, edge]
+    ports:
+      - "127.0.0.1:${KAIZEVAL_PORT:-8000}:8000"
+    volumes:
+      - ./nginx.offline.conf:/etc/nginx/nginx.conf:ro
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    networks: [isolated]
+    volumes:
+      - ollama:/root/.ollama
+
+networks:
+  isolated:
+    internal: true
+  edge: {}
+
+volumes:
+  ollama:
