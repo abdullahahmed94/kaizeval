@@ -34,6 +34,8 @@ PROVIDER_KINDS = ["fake", "openai_compatible"]
 
 T = TypeVar("T", bound=BaseModel)
 _semaphores: dict[str, threading.BoundedSemaphore] = {}
+# Optional request fields that a provider refused once (HTTP 400). They are left out from then on.
+_refused_fields: dict[str, set[str]] = {}
 _semaphore_lock = threading.Lock()
 RETRY_BASE_SECONDS = 0.5
 
@@ -54,6 +56,7 @@ class Completion:
     tokens_estimated: bool
     latency_ms: int
     model: str
+    truncated: bool = False  # the endpoint stopped at the output limit
 
 
 @dataclass
@@ -99,18 +102,32 @@ def _openai_complete(provider: ModelProvider, api_key: str | None, policy: Egres
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    body: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-    json_mode = bool((provider.params or {}).get("json_mode", True))
-    if json_mode:
+    params = provider.params or {}
+    refused = _refused_fields.setdefault(provider.id, set())
+    body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    if params.get("send_temperature", True) and "temperature" not in refused:
+        body["temperature"] = temperature
+    if params.get("json_mode", True) and "response_format" not in refused:
         body["response_format"] = {"type": "json_object"}
     started = time.perf_counter()
     try:
         with guarded_client(policy, timeout=timeout, headers=headers) as client:
             response = client.post(url, json=body)
-            if response.status_code == 400 and json_mode:
-                # Some compatible servers reject response_format; retry once without it.
-                body.pop("response_format", None)
-                response = client.post(url, json=body)
+            # Endpoints differ in what they accept: some refuse this response_format, and models
+            # that reason before answering refuse a temperature. Leave the optional fields out one
+            # at a time, starting with the one the error names, and remember what was refused.
+            order = ["response_format", "temperature"]
+            complaint = response.text.lower() if response.status_code == 400 else ""
+            if "temperature" in complaint and "response_format" not in complaint:
+                order.reverse()
+            dropped: list[str] = []
+            for name in order:
+                if response.status_code == 400 and name in body:
+                    del body[name]
+                    dropped.append(name)
+                    response = client.post(url, json=body)
+            if dropped and response.status_code < 400:
+                refused.update(dropped)
     except EgressBlocked as exc:
         raise GatewayError("EGRESS_BLOCKED", exc.reason) from exc
     except httpx.TimeoutException as exc:
@@ -130,13 +147,20 @@ def _openai_complete(provider: ModelProvider, api_key: str | None, policy: Egres
     try:
         data = response.json()
         text = data["choices"][0]["message"]["content"] or ""
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        truncated = data["choices"][0].get("finish_reason") == "length"
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
         raise GatewayError("BAD_RESPONSE", "model endpoint returned an unexpected payload") from exc
     usage = data.get("usage") or {}
     estimated = "prompt_tokens" not in usage
     prompt_tokens = usage.get("prompt_tokens") or _estimate_tokens(json.dumps(messages))
     completion_tokens = usage.get("completion_tokens") or _estimate_tokens(text)
-    return Completion(text, int(prompt_tokens), int(completion_tokens), estimated, latency, data.get("model") or model)
+    return Completion(text, int(prompt_tokens), int(completion_tokens), estimated, latency, data.get("model") or model,
+                      truncated=truncated)
+
+
+TRUNCATED_HELP = ("the model reached its output limit of {limit} tokens before finishing its answer. Models that reason "
+                  "before answering spend output tokens on that reasoning. Raise max_tokens for this role "
+                  "(project file: model.max_tokens)")
 
 
 class Gateway:
@@ -307,6 +331,11 @@ class Gateway:
             try:
                 parsed = task.schema.model_validate(extract_json(completion.text))
             except (ValueError, ValidationError) as exc:
+                if completion.truncated:
+                    # Asking again with the same limit would cut the answer at the same place.
+                    self._record(task, provider, completion.model, status="error", error_code="OUTPUT_TRUNCATED",
+                                 completion=completion)
+                    raise GatewayError("OUTPUT_TRUNCATED", TRUNCATED_HELP.format(limit=policy.max_tokens)) from exc
                 self._record(task, provider, completion.model, status="invalid_output", error_code="INVALID_OUTPUT",
                              completion=completion)
                 last_error = GatewayError("INVALID_OUTPUT", f"model reply did not match the required schema: {str(exc)[:200]}")
@@ -346,7 +375,9 @@ class Gateway:
         if ok:
             nonce = uuid.uuid4().hex[:8]
             temp_policy = ModelRolePolicy(workspace_id=self.workspace_id, role="preflight", provider_id=provider.id,
-                                          model=provider.default_model, temperature=0.0, max_tokens=200,
+                                          model=provider.default_model, temperature=0.0,
+                                          # room for a model that reasons before it answers
+                                          max_tokens=int((provider.params or {}).get("preflight_max_tokens", 1024)),
                                           # a local model can need minutes to load into memory on its first call
                                           timeout_s=float((provider.params or {}).get("preflight_timeout_s", 300)))
             task = TASKS["preflight"]
@@ -359,7 +390,9 @@ class Gateway:
                              "returned valid JSON matching the schema" if getattr(echo, "echo", "") == nonce
                              else "JSON was valid but the echoed value was wrong; the model may not follow instructions reliably")
                 except (ValueError, ValidationError):
-                    ok = add("structured_output", False, "the reply was not valid JSON for the requested schema")
+                    ok = add("structured_output", False,
+                             TRUNCATED_HELP.format(limit=temp_policy.max_tokens) if completion.truncated
+                             else "the reply was not valid JSON for the requested schema")
                 self._record(task, provider, completion.model, status="ok" if ok else "invalid_output", completion=completion)
             except GatewayError as exc:
                 ok = add("connectivity", False, f"{exc.code}: {exc.message}")

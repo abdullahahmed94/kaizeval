@@ -157,6 +157,7 @@ never continues by itself and never promotes.
 | `model.base_url`, `model.model` | none | Any OpenAI-compatible endpoint and the model name. Omit `model` to run without a model |
 | `model.api_key_env` | none | Name of the environment variable that holds the API key (the key itself never goes in the file) |
 | `model.allow_public` | `false` | Needed for a hosted provider, together with `network: connected` |
+| `model.max_tokens`, `model.temperature`, `model.timeout_s` | `2000`, `0`, `300` | Output limit, temperature and timeout of every model call. Raise `max_tokens` for models that reason before answering |
 | `model.kind` | `openai_compatible` | `fake` selects the built-in deterministic stand-in (results are SYNTHETIC) |
 | `agent.url` | required | HTTP endpoint of the agent |
 | `agent.style` | `simple` | `simple` (`{"message": ...}` → `{"answer": ...}`) or `openai` (chat completions) |

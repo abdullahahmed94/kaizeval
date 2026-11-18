@@ -46,7 +46,9 @@ with a compatible API.
 | `api_key` | Optional. Stored encrypted; never returned |
 | `default_model` | Model name sent when a role policy does not set one |
 | `allow_egress` | Owner opt-in to send workspace content to a **public** destination. Ignored in offline mode |
-| `params.json_mode` | Send `response_format: {"type": "json_object"}` (default `true`; retried without it if the server answers 400) |
+| `params.json_mode` | Send `response_format: {"type": "json_object"}` (default `true`; left out if the server answers 400) |
+| `params.send_temperature` | Send the role's temperature (default `true`; left out if the server answers 400, as models that reason before answering do) |
+| `params.preflight_max_tokens` | Output limit of the preflight call (default `1024`) |
 | `params.max_retries` | Retries for transient failures and invalid output (default `2`) |
 | `params.preflight_timeout_s` | How long preflight waits for the first answer (default `300`; local models can need minutes to load) |
 | `params.max_concurrency` | Simultaneous requests to this provider (default `4`) |
@@ -131,6 +133,18 @@ Redirects are never followed and proxy environment variables are ignored.
 A measured run of every role against a real local model, with the problems it revealed, is in
 [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md). To repeat it with your model:
 `python scripts/real_model_check.py --base-url <url> --model <name>`.
+
+### Hosted endpoints that accept less
+
+"OpenAI-compatible" endpoints do not all accept the same request. When an endpoint answers
+HTTP 400, the gateway leaves out the optional fields one at a time (`response_format`, then
+`temperature`, starting with the one the error message names), and remembers for that provider
+what was refused, so only the first call pays for the discovery. The schema is always part of the
+prompt and every reply is validated, so structured output does not depend on `response_format`.
+
+Models that reason before answering count that reasoning against the output limit. If a reply is
+cut at the limit before it is valid JSON, the call fails with `OUTPUT_TRUNCATED` instead of being
+retried: raise the role's `max_tokens` (project file: `model.max_tokens`).
 
 ## Adding a provider kind
 

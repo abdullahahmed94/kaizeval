@@ -5,7 +5,7 @@ checked by hand, and what is not done. Run the evidence yourself:
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 131 tests; strict offline; fails on any non-loopback connection
+pytest                 # 135 tests; strict offline; fails on any non-loopback connection
 kaizeval demo          # the whole journey on the bundled sample agent
 ```
 

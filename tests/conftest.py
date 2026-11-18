@@ -201,6 +201,8 @@ class MockModel:
         self.headers: list[dict[str, str]] = []
         self.script: list[Any] = []  # queued overrides: int status code, or str raw content
         self.reject_response_format = False
+        self.reject_temperature = False   # like hosted models that reason before answering
+        self.finish_reason: str | None = None
         app = FastAPI()
 
         @app.post("/v1/chat/completions")
@@ -212,6 +214,8 @@ class MockModel:
             self.headers.append(dict(request.headers))
             if self.reject_response_format and "response_format" in body:
                 return JSONResponse(status_code=400, content={"error": "response_format unsupported"})
+            if self.reject_temperature and "temperature" in body:
+                return JSONResponse(status_code=400, content={"error": "temperature is not supported with this model"})
             if self.script:
                 step = self.script.pop(0)
                 if isinstance(step, int):
@@ -219,7 +223,8 @@ class MockModel:
                 content = step
             else:
                 content = json.dumps(self.answer(body))
-            return {"model": body.get("model"), "choices": [{"message": {"role": "assistant", "content": content}}],
+            return {"model": body.get("model"),
+                    "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": self.finish_reason}],
                     "usage": {"prompt_tokens": 120, "completion_tokens": 30}}
 
         self.url, self.server = serve(app)

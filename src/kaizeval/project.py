@@ -46,6 +46,7 @@ model:
   model: your-model-name
   # api_key_env: MY_PROVIDER_API_KEY      # name of the environment variable that holds the key
   # allow_public: true                    # required for a hosted provider (with network: connected)
+  # max_tokens: 8000                      # output limit per call; raise it for models that reason first
 
 # --- 2. The agent you want to test --------------------------------------------------------
 agent:
@@ -103,6 +104,8 @@ DEFAULTS: dict[str, Any] = {
                    "max_agent_calls": None, "max_model_calls": None},
     "optimize": {"enabled": False, "max_rounds": None, "stagnation_rounds": 3},
 }
+
+MODEL_KEYS = {"kind", "base_url", "model", "allow_public", "api_key_env", "params", "max_tokens", "temperature", "timeout_s"}
 
 Log = Callable[[str], None]
 
@@ -305,6 +308,9 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
     model = config["model"]
     reviewers = int(config["evaluation"]["reviewers"])
     if model:
+        unknown = sorted(set(model) - MODEL_KEYS)
+        if unknown:
+            raise ProjectError(f"unknown setting(s) under 'model': {', '.join(unknown)}")
         fingerprint = _fingerprint(model)
         if (state.get("provider") or {}).get("fingerprint") != fingerprint:
             kind = model.get("kind", "openai_compatible")
@@ -312,6 +318,7 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
                 "name": f"{config['project']} model", "kind": kind, "base_url": model.get("base_url"),
                 "default_model": model.get("model", ""), "allow_egress": bool(model.get("allow_public")),
                 "api_key": _secret(model.get("api_key_env"), "model.api_key_env"), "params": model.get("params") or {}})
+
             state["provider"] = {"id": provider["id"], "fingerprint": fingerprint}
         provider_id = state["provider"]["id"]
         preflight = api.call("POST", f"{base}/model-providers/{provider_id}/verify")
@@ -319,7 +326,9 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
             failed = "; ".join(f"{c['name']}: {c['detail']}" for c in preflight["checks"] if not c["ok"])
             state.pop("provider", None)
             raise ProjectError(f"the model did not pass preflight ({failed})")
-        api.call("PUT", f"{base}/model-role-policies/default", json={"provider_id": provider_id})
+        api.call("PUT", f"{base}/model-role-policies/default", json={
+            "provider_id": provider_id,
+            **{key: model[key] for key in ("max_tokens", "temperature", "timeout_s") if model.get(key) is not None}})
         log(f"[2/7] model verified{' (FAKE provider: results are SYNTHETIC)' if preflight.get('synthetic') else ''}")
     else:
         if reviewers:

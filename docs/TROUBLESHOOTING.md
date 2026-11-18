@@ -15,6 +15,8 @@ report a problem.
 | Preflight or the first call fails with `TIMEOUT` | A local model server loads the model on its first request, which can take minutes | Run Verify again once the model is loaded, keep it loaded (`OLLAMA_KEEP_ALIVE` for Ollama), or raise `params.preflight_timeout_s` and the role timeout |
 | Preflight: `structured_output` fails | The model did not return valid JSON for the schema | Use a model that follows JSON instructions, or a server that supports JSON mode |
 | `INVALID_OUTPUT` during a run | The model kept returning invalid JSON after retries | Same as above; raise `params.max_retries` if failures are occasional |
+| `OUTPUT_TRUNCATED` | The model reached its output limit before finishing its answer; models that reason first spend output tokens on it | Raise `max_tokens` for the role (project file: `model.max_tokens`) |
+| `BAD_REQUEST` from a hosted endpoint | The endpoint refuses something other than `response_format` or `temperature`, which are dropped automatically | Read the quoted error; check the model name and the endpoint's documentation |
 | `BUDGET_EXCEEDED` | A call, token, cost or agent-call limit was reached | The run keeps its partial results. Raise the limit and start again |
 | `AUTH` | The endpoint rejected the API key | Re-create the provider with a valid key (keys cannot be read back) |
 

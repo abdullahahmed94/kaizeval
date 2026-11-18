@@ -60,6 +60,22 @@ def test_project_file_is_validated(tmp_path, config, message):
     with pytest.raises(ProjectError) as err:
         load_config(_write(tmp_path, config))
     assert message in str(err.value)
+
+
+def test_model_block_sets_the_role_limits_and_rejects_typos(tmp_path, remote, sample_agent, client):
+    """`model.max_tokens` reaches the role policy (reasoning models need room), and a typo is an error, not silence."""
+    shutil.copy(EXAMPLES / "approved-qa.csv", tmp_path / "approved-qa.csv")
+    base = {"project": "limits", "agent": {"url": sample_agent["url"] + "/chat"}, "tests": {"import": ["approved-qa.csv"]},
+            "evaluation": {"reviewers": 0}}
+    with pytest.raises(ProjectError) as err:
+        run_project(_write(tmp_path, {**base, "model": {"kind": "fake", "max_token": 9000}}), url=remote, log=_quiet)
+    assert "unknown setting(s) under 'model': max_token" in str(err.value)
+    result = run_project(_write(tmp_path, {**base, "model": {"kind": "fake", "max_tokens": 9000, "timeout_s": 90}}),
+                         url=remote, log=_quiet)
+    token = os.environ["KAIZEVAL_TOKEN"]
+    policies = client.get(f"/api/v1/workspaces/{result['workspace_id']}/model-role-policies",
+                          headers={"Authorization": f"Bearer {token}"}).json()
+    assert policies["default"]["max_tokens"] == 9000 and policies["default"]["timeout_s"] == 90
     assert cli.main(["run", "-c", str(tmp_path / "missing.yaml")]) == cli.EXIT_ERROR
 
 

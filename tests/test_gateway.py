@@ -122,6 +122,75 @@ def test_response_format_fallback(client, mock_model):
         mock_model.reject_response_format = False
 
 
+def test_fields_a_hosted_endpoint_refuses_are_left_out_and_remembered(client, mock_model):
+    """Hosted endpoints differ: one refuses `response_format: json_object`, a model that reasons before
+    answering refuses a temperature. The first call finds out; later calls do not pay for it again."""
+    s = new_user(client)
+    provider = _local_provider(s, mock_model)
+    mock_model.reject_response_format = mock_model.reject_temperature = True
+    try:
+        before = len(mock_model.requests)
+        assert s.post(f"/ws/model-providers/{provider['id']}/verify")["ok"] is True
+        first = mock_model.requests[before:]
+        assert len(first) == 3 and "temperature" in first[0] and "response_format" in first[0]
+        assert "temperature" not in first[2] and "response_format" not in first[2] and first[2]["max_tokens"] >= 1024
+        s.put("/ws/model-role-policies/default", json={"provider_id": provider["id"]})
+        before = len(mock_model.requests)
+        with session_scope() as db:
+            judgment, _ = Gateway(db, s.ws).generate("judge.primary", {"dimensions": ["relevance"]})
+        later = mock_model.requests[before:]
+        assert judgment.scores == {"relevance": 0.9} and len(later) == 1
+        assert "temperature" not in later[0] and "response_format" not in later[0]
+    finally:
+        mock_model.reject_response_format = mock_model.reject_temperature = False
+
+
+def test_only_the_refused_field_is_dropped(client, mock_model):
+    """A model that refuses only the temperature keeps JSON mode, and the other way round."""
+    s = new_user(client)
+    provider = _local_provider(s, mock_model)
+    mock_model.reject_temperature = True
+    try:
+        before = len(mock_model.requests)
+        assert s.post(f"/ws/model-providers/{provider['id']}/verify")["ok"] is True
+        sent = mock_model.requests[before:]
+        assert len(sent) == 2 and "temperature" not in sent[1] and sent[1]["response_format"] == {"type": "json_object"}
+    finally:
+        mock_model.reject_temperature = False
+    # a provider can also be told not to send a temperature at all
+    quiet = _local_provider(s, mock_model, params={"send_temperature": False})
+    before = len(mock_model.requests)
+    assert s.post(f"/ws/model-providers/{quiet['id']}/verify")["ok"] is True
+    assert len(mock_model.requests) == before + 1 and "temperature" not in mock_model.requests[-1]
+
+
+def test_an_answer_cut_at_the_output_limit_is_reported_as_such(client, mock_model):
+    """A reasoning model can spend its whole output allowance before answering. That is not "invalid JSON",
+    and asking again with the same limit cannot help."""
+    s = new_user(client)
+    provider = _local_provider(s, mock_model)
+    assert s.post(f"/ws/model-providers/{provider['id']}/verify")["ok"] is True
+    s.put("/ws/model-role-policies/default", json={"provider_id": provider["id"], "max_tokens": 300})
+    mock_model.finish_reason = "length"
+    try:
+        mock_model.script[:] = ['{"scores": {"relev']
+        before = len(mock_model.requests)
+        with session_scope() as db, pytest.raises(GatewayError) as err:
+            Gateway(db, s.ws, run_id="run-cut").generate("judge.primary", {"dimensions": ["relevance"]})
+        assert err.value.code == "OUTPUT_TRUNCATED" and "300 tokens" in err.value.message
+        assert "model.max_tokens" in err.value.message and len(mock_model.requests) == before + 1  # not retried
+        # the same during preflight: the check explains what happened
+        mock_model.script[:] = [""]
+        checks = {c["name"]: c for c in s.post(f"/ws/model-providers/{provider['id']}/verify")["checks"]}
+        assert checks["structured_output"]["ok"] is False and "output limit" in checks["structured_output"]["detail"]
+        # a complete answer that merely ends at the limit is still accepted
+        assert s.post(f"/ws/model-providers/{provider['id']}/verify")["ok"] is True
+    finally:
+        mock_model.finish_reason = None
+        mock_model.script[:] = []
+    assert s.post(f"/ws/model-providers/{provider['id']}/verify")["ok"] is True
+
+
 def test_unreachable_local_model_fails_visibly(client):
     s = new_user(client)
     provider = s.post("/ws/model-providers", json={"name": "down", "kind": "openai_compatible",

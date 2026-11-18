@@ -32,6 +32,12 @@ All notable changes to this project are documented here. The format follows
 - [docs/REAL_MODEL_VALIDATION.md](docs/REAL_MODEL_VALIDATION.md): what happened when every step
   was run against a real local model.
 
+- Hosted endpoints that accept less than the usual request: a refused `response_format` or
+  `temperature` is left out and remembered per provider (`params.send_temperature`), a reply cut
+  at the output limit fails as `OUTPUT_TRUNCATED` instead of being retried, and `model.max_tokens`,
+  `model.temperature` and `model.timeout_s` in the project file set the limits of every call.
+  Unknown keys under `model` are now an error.
+
 ### Changed
 - The improvement loop has no fixed number of rounds any more. It runs until the target is
   reached or until three cycles in a row leave the score unchanged (`stagnation_rounds: 3`).

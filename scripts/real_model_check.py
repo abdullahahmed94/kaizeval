@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import Any
 
 DATA = tempfile.mkdtemp(prefix="kaizeval-realcheck-")
-os.environ.update({"KAIZEVAL_DATA_DIR": DATA, "KAIZEVAL_OFFLINE": "true", "KAIZEVAL_WORKER_MODE": "inline",
+# --hosted: a public endpoint with an API key. Everything else stays strictly offline.
+HOSTED = "--hosted" in sys.argv
+os.environ.update({"KAIZEVAL_DATA_DIR": DATA, "KAIZEVAL_OFFLINE": "false" if HOSTED else "true", "KAIZEVAL_WORKER_MODE": "inline",
                    "KAIZEVAL_LOG_LEVEL": "WARNING"})
 
 import uvicorn  # noqa: E402
@@ -238,7 +240,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--base-url", default="http://localhost:11434/v1")
     parser.add_argument("--model", required=True)
-    parser.add_argument("--api-key-env", default=None)
+    parser.add_argument("--api-key-env", default=None, help="name of the environment variable that holds the API key")
+    parser.add_argument("--hosted", action="store_true",
+                        help="the endpoint is a public hosted provider: use a connected workspace and allow egress to it")
+    parser.add_argument("--max-tokens", type=int, default=2000, help="output limit per model call")
     parser.add_argument("--stages", default="roles,dataset,review,optimize")
     parser.add_argument("--cases", type=int, default=12)
     parser.add_argument("--out", default="real-model-check.json")
@@ -251,12 +256,12 @@ def main() -> int:
     serve(create_sample_agent(admin_token=ADMIN), agent_port)
     api = Api(f"http://127.0.0.1:{api_port}")
     api.token = api.call("POST", "/auth/signup", json={"email": "check@example.test", "password": uuid.uuid4().hex, "name": "check"})["token"]
-    ws = api.call("POST", "/workspaces", json={"name": "real model check", "mode": "offline"})["id"]
+    ws = api.call("POST", "/workspaces", json={"name": "real model check", "mode": "connected" if args.hosted else "offline"})["id"]
 
     print("preflight", flush=True)
     provider = api.call("POST", f"/workspaces/{ws}/model-providers", json={
         "name": "real", "kind": "openai_compatible", "base_url": args.base_url, "default_model": args.model,
-        "api_key": os.environ.get(args.api_key_env) if args.api_key_env else None})
+        "allow_egress": args.hosted, "api_key": os.environ.get(args.api_key_env) if args.api_key_env else None})
     preflight = api.call("POST", f"/workspaces/{ws}/model-providers/{provider['id']}/verify")
     out["preflight"] = preflight
     for check in preflight["checks"]:
@@ -264,7 +269,7 @@ def main() -> int:
     if not preflight["ok"]:
         Path(args.out).write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
         return 2
-    api.call("PUT", f"/workspaces/{ws}/model-role-policies/default", json={"provider_id": provider["id"], "timeout_s": 300})
+    api.call("PUT", f"/workspaces/{ws}/model-role-policies/default", json={"provider_id": provider["id"], "timeout_s": 300, "max_tokens": args.max_tokens})
 
     agent = api.call("POST", f"/workspaces/{ws}/agents", json={
         "name": "sample", "adapter": "local_config", "config": {"base_url": f"http://127.0.0.1:{agent_port}"},
