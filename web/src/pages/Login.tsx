@@ -89,7 +89,7 @@ export function LoginPage() {
   return (
     <main className="login">
       <div className="login-card">
-        <h1 className="brand">Kaizeval</h1>
+        <h1 className="brand"><img className="brand-mark" src="/favicon.svg" alt="" />Kaizeval</h1>
         <p className="muted">Evaluate, diagnose and safely optimize AI agents on your own infrastructure.</p>
         <ErrorNote error={session.error} />
         <div className={signupOpen ? "login-forms two" : "login-forms"}>

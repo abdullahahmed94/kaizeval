@@ -42,6 +42,10 @@ All notable changes to this project are documented here. The format follows
   test-suite on PostgreSQL.
 
 ### Changed
+- Console polish: a tinted navigation rail with the product mark, a timeline with status markers
+  instead of coloured side stripes, hairline alerts, themed selection, caret, scrollbars and
+  focus ring, tabular numerals, a readable text measure, larger touch targets, and reduced-motion
+  support. No behaviour changed.
 - The improvement loop has no fixed number of rounds any more. It runs until the target is
   reached or until three cycles in a row leave the score unchanged (`stagnation_rounds: 3`).
   `max_rounds` is now an optional extra limit.

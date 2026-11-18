@@ -351,7 +351,7 @@ function ResultsTable({ runId }: { runId: string }) {
                       <td className="cell-wide">
                         <button type="button" className="expander" aria-expanded={open}
                           onClick={() => setExpanded(open ? null : result.id)}>
-                          <span className="expander-icon" aria-hidden="true">{open ? "−" : "+"}</span>
+                          <span className={open ? "expander-icon open" : "expander-icon"} aria-hidden="true" />
                           <span>{result.case?.turns?.[0]?.content ?? `Case ${result.case_id.slice(0, 8)}`}</span>
                         </button>
                       </td>

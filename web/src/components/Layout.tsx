@@ -71,6 +71,7 @@ export function Layout() {
       <aside className="sidebar">
         <div className="sidebar-top">
           <NavLink to="/" className="brand" end>
+            <img className="brand-mark" src="/favicon.svg" alt="" />
             Kaizeval
           </NavLink>
           <ModeBadge />
