@@ -31,7 +31,7 @@ That needs a real model that you configure.
 | 2 | PDF/DOCX/TXT/MD ingestion with traceable evidence and source citations | Done | `tests/test_documents.py` (file, version, SHA-256, page or section, character offsets, verbatim quote) |
 | 3 | Requirements or inferred specification with Review / Edit / Skip and version history | Done | `test_specification_review_edit_skip_and_versions`, `test_requirements_work_without_a_model_but_inference_does_not` |
 | 4 | Tagged cases, coverage, regression/holdout split with enforced isolation | Done | `test_dataset_generation_split_and_coverage`, `test_holdout_is_sealed`, `test_holdout_stays_sealed_from_the_optimizer` |
-| 5 | A real configured model is routed through the gateway; a clearly flagged mock runs CI without secrets | Done for one local model | Automated: the OpenAI-compatible path against a local mock server (`tests/test_gateway.py`). Manual: every role, test generation, three review modes, two optimization loops and one continuation against `qwen2.5:7b` on Ollama, recorded in [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md). No hosted provider was exercised |
+| 5 | A real configured model is routed through the gateway; a clearly flagged mock runs CI without secrets | Done for one local model and one hosted provider | Automated: the OpenAI-compatible path against a local mock server (`tests/test_gateway.py`). Manual: every role, test generation, three review modes, two optimization loops and one continuation against `qwen2.5:7b` on Ollama, recorded in [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md). One hosted provider was exercised in connected mode with an API key (run 5) |
 | 6 | Single and Dual + Arbiter evaluation; disagreement, uncertainty and evidence stay visible | Done | `test_single_evaluation_with_evidence_and_separate_costs`, `test_dual_judges_are_independent_and_arbitrated` |
 | 7 | Recommendations with reasons; read-only HTTP agents are not offered auto-patching | Done | `test_findings_and_recommendations`, `test_black_box_agent_gets_recommendations_only` |
 | 8 | Immutable A, isolated B, patch only B, paired A/B, full regression, rollback | Done | `test_optimization_improves_candidate_and_leaves_baseline_untouched`, `test_every_round_reruns_full_regression_and_is_paired`, `test_failing_gates_roll_the_candidate_back` |
@@ -74,10 +74,10 @@ Still unverified:
   SQLAlchemy with no dialect-specific SQL.
 - **S3 / MinIO storage** is implemented (`storage.S3Storage`) and has no test.
 - **The network-isolated Compose override** is provided and unvalidated.
-- **Other models and hosted providers.** One local model was exercised end to end (see
-  [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md)). The behaviour of any other model as a
-  tester, reviewer or optimizer, and the connected mode with a paid API key, are not established
-  by this project.
+- **Other models and providers.** One local model and one hosted provider (connected mode, API
+  key) were exercised end to end (see [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md)). The
+  behaviour of any other model as a tester, reviewer or optimizer, and of any other hosted
+  endpoint, is not established by this project.
 
 ## Deliberate differences from the original blueprint
 

@@ -328,9 +328,10 @@ Kaizeval is **alpha** software. Please read these before relying on it.
   with `kaizeval.agentkit`). No vendor-specific connector is included; other agents are evaluated as
   black boxes and get recommendations.
 - It has been run end to end against one real local model (`qwen2.5:7b` on Ollama), including a
-  model-backed agent improved through its system prompt; what happened, what broke and what was
-  fixed is in [docs/REAL_MODEL_VALIDATION.md](docs/REAL_MODEL_VALIDATION.md). Other models may
-  behave differently, and no hosted provider was exercised. CI builds and health-checks the Docker
+  model-backed agent improved through its system prompt, and against one hosted provider with an
+  API key; what happened, what broke and what was fixed is in
+  [docs/REAL_MODEL_VALIDATION.md](docs/REAL_MODEL_VALIDATION.md). Other models and other
+  providers may behave differently. CI builds and health-checks the Docker
   Compose stack with PostgreSQL on every push, while the functional tests run on SQLite.
 - Model reviewers make mistakes. One claimed a refusal that was not there; such claims are now
   verified against the answer, but treat reviewer scores as estimates, and review language
@@ -357,7 +358,7 @@ Kaizeval is **alpha** software. Please read these before relying on it.
 
 ## Roadmap
 
-A full PostgreSQL test run and S3 storage tests · validation with more models and a hosted provider · judge calibration against human
+A full PostgreSQL test run and S3 storage tests · validation with more models and providers · judge calibration against human
 labels · knowledge-base health report · connectors for common agent frameworks · service tokens
 and scheduled runs · single sign-on · adversarial test packs · SQL and API ground truth.
 
