@@ -135,6 +135,71 @@ that every fake-provider result carries.
 |---|---|---|
 | ![Overview page with the journey checklist](docs/images/console-overview.jpg) | ![Optimization run with the round-by-round timeline](docs/images/console-optimization.jpg) | ![Paired A/B comparison with confidence interval and verdict](docs/images/console-ab-comparison.jpg) |
 
+## Test your own agent in three commands
+
+```bash
+kaizeval init        # writes kaizeval.yaml
+# edit kaizeval.yaml: your model, your agent's URL, your documents and requirements
+kaizeval run
+```
+
+```yaml
+model:
+  base_url: http://localhost:11434/v1   # any OpenAI-compatible endpoint, local or hosted
+  model: your-model-name
+agent:
+  url: http://127.0.0.1:8200/chat       # the agent you built
+requirements: |
+  Answer customer questions using only the company documents.
+  Say you do not know when the documents do not contain the answer.
+knowledge: [docs/**/*.md]
+tests:
+  cases: 30
+  testers: 3          # independent tester agents: each writes and runs its own share of the tests
+evaluation:
+  reviewers: 2        # independent reviewer agents per answer (0 = rules only, up to 7)
+  target: 1.0         # keep improving until the score reaches 100%
+```
+
+`kaizeval run` starts a local engine (no server, no account), lets the testers write and run the
+tests with part of them sealed as a holdout, lets the reviewers score the answers, and prints the
+score, the failed cases, the recommendations and a report. Run it again after changing your agent
+and it compares the new run with the first one, case by case:
+
+```text
+[5/7] tests ready: 30 regression, 12 sealed holdout (3 tester(s))
+[6/7] evaluated with 3 reviewer(s): overall 40.0%, pass rate 13.3%, critical failures 3
+[7/7] optimization completed (the optimizer found no further safe change): best 82.3% after 5 round(s)
+    A/B on regression: +43.09 pp -> improved
+    sealed holdout:    +26.38 pp -> inconclusive
+  next: Candidate B is waiting for your decision. Nothing was changed in production.
+        Run `kaizeval release approve` to promote it, or `kaizeval release reject`.
+  result: target not met
+```
+
+(That output is from `examples/kaizeval.yaml` with the built-in fake model, so it is SYNTHETIC.)
+The loop aims for your target, and 100% is a target, not a promise: it also stops when nothing
+improves any more or a limit is hit, and says why. The release decision is always yours.
+Full reference: [docs/PROJECT_MODE.md](docs/PROJECT_MODE.md).
+
+## Use it from a coding assistant
+
+Any assistant that can run a terminal command can drive the loop: it runs
+`kaizeval run --json --no-input`, reads `failures` and `recommendations`, edits your agent, and
+runs again until `target_met` is true. For assistants that speak the Model Context Protocol there
+is a built-in server:
+
+```bash
+pip install "kaizeval[mcp]"
+```
+
+```json
+{ "mcpServers": { "kaizeval": { "command": "kaizeval", "args": ["mcp"] } } }
+```
+
+It exposes `init_project`, `evaluate_agent`, `last_result` and `release_candidate`, and instructs
+the assistant to ask you before any release.
+
 ## Use it through the API
 
 Everything the console does is a REST call, so the whole journey can be scripted. A complete
@@ -216,12 +281,12 @@ Action:
 | Models | One gateway for eight roles (generator, reference drafter, two judges, arbiter, root cause, optimizer, spec inference); preflight; budgets; per-role usage; no silent fallback |
 | Knowledge | PDF, DOCX, Markdown, text; versioned; every passage traceable to file, page or section and offsets |
 | Specification | From your requirements, inferred, or both; versioned; Review & Edit, Approve or Skip |
-| Tests | Knowledge, citation, edge-case, multi-turn and unanswerable cases; language variants (needs a real model); import of approved Q&A; coverage report; stale-case detection when a document changes |
-| Evaluation | Deterministic-first scoring; single or dual judges with arbiter; critical-failure gates; "needs human review" and "not scored" as first-class outcomes |
+| Tests | Written by 1 to 8 independent tester agents, each with its own angle; knowledge, citation, edge-case, multi-turn and unanswerable cases; language variants (needs a real model); import of approved Q&A; coverage report; stale-case detection when a document changes |
+| Evaluation | Deterministic-first scoring; 1 to 7 independent reviewer agents with an arbiter on disagreement; testers run in parallel; critical-failure gates; "needs human review" and "not scored" as first-class outcomes |
 | Diagnosis | Findings that separate observation from hypothesis; prioritised recommendations with a review workflow |
 | Optimization | Human-guided or autonomous; allowlisted patches on an isolated candidate; full regression each round; rollback; budgets, stagnation and cancellation |
 | Validation | Paired A/B with bootstrap confidence interval; sealed, rotatable holdout; explicit approval, promotion and rollback |
-| Operations | Roles (owner, editor, reviewer, viewer); audit trail; encrypted credentials; JSON and Markdown reports; REST API; CLI; GitHub Action |
+| Operations | One-file project mode (`kaizeval init` / `run`); MCP server for coding assistants; roles (owner, editor, reviewer, viewer); audit trail; encrypted credentials; JSON and Markdown reports; REST API; CLI; GitHub Action |
 
 Console pages: Overview, Models, Agents, Knowledge, Specification, Datasets, Evaluations,
 Recommendations, Optimization, Candidates, Audit, Workspace settings.
@@ -237,6 +302,7 @@ Recommendations, Optimization, Candidates, Audit, Workspace settings.
 Kaizeval is **alpha** software. Please read these before relying on it.
 
 - A score on generated tests describes behaviour on those tests. It is not real-world accuracy.
+- Reaching the target score is a goal, not a guarantee. The improvement loop is bounded and can stop below it.
 - Model judges are estimates and can be wrong or biased. Two judges agreeing is not proof.
 - Automatic optimization works only for agents that implement the candidate protocol. No
   vendor-specific connector is included; arbitrary platforms are evaluated as black boxes.
@@ -252,7 +318,8 @@ Kaizeval is **alpha** software. Please read these before relying on it.
 
 | | |
 |---|---|
-| [Install, configure, upgrade](docs/INSTALL.md) | [Architecture](docs/ARCHITECTURE.md) |
+| [Project mode: one file, one command](docs/PROJECT_MODE.md) | [Install, configure, upgrade](docs/INSTALL.md) |
+| [Architecture](docs/ARCHITECTURE.md) | [Examples](examples/README.md) |
 | [Workflow, step by step](docs/WORKFLOW.md) | [API quickstart script](examples/api_quickstart.py) |
 | [REST API](docs/API.md) | [LLM Gateway](docs/LLM_GATEWAY.md) |
 | [Connector SDK](docs/CONNECTOR_SDK.md) | [Security notes](docs/SECURITY.md) |

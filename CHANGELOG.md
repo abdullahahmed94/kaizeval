@@ -22,6 +22,12 @@ First public, self-hosted release.
   Approve and Skip & Continue.
 - Evidence-linked test generation, import of approved Q&A (CSV, JSONL, JSON), stratified
   regression/holdout split, coverage report, stale-case detection and holdout rotation.
+- Project mode: `kaizeval init` and `kaizeval run` drive the whole journey from one
+  `kaizeval.yaml` file with an embedded local engine, a paired comparison with the baseline run
+  on every re-run, and `kaizeval release approve|reject` for the release decision.
+- A chosen number of independent tester agents (1-8) that write the tests and call the agent in
+  parallel, and of independent reviewer agents (0-7) with an arbiter on disagreement.
+- An MCP server (`kaizeval mcp`) so coding assistants can evaluate and improve an agent.
 - Evaluation in deterministic, single-judge and dual-judge-with-arbiter modes; per-dimension and
   per-category scores; critical-failure gates; cancellation and call budgets.
 - Rule-based diagnostics with optional model hypotheses, and prioritised recommendations with a

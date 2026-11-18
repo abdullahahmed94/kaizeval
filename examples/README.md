@@ -5,6 +5,7 @@
 | `approved-qa.csv` | Import format for business-approved questions and answers (Datasets → Import) |
 | `conversations.jsonl` | Import format for real conversations turned into test cases |
 | `quality-gate.yml` | A GitHub Actions workflow that fails a pull request when the agent regresses |
+| `kaizeval.yaml` | A complete project file for the bundled sample agent: 3 testers, 3 reviewers, automatic optimization. Run it with `kaizeval run -c examples/kaizeval.yaml` |
 | `api_quickstart.py` | Using Kaizeval purely over HTTP with the standard library: sign up, register an agent, import questions, evaluate, read results and the report |
 | `minimal_agent.py` | The smallest agent Kaizeval can evaluate as a black box (about 20 lines) |
 

@@ -190,6 +190,8 @@ The table below is generated from the application (`python scripts/gen_api_refer
 
 | Key | Default | Meaning |
 |---|---|---|
+| `reviewers` | by mode | With `mode: "panel"`: number of independent reviewers per answer (2 to 7). `single` = 1, `dual` = 2, `deterministic` = 0 |
+| `testers` | `1` | Number of testers calling the agent in parallel (1 to 8) |
 | `pass_threshold` | `0.7` | Overall score a case needs to pass |
 | `disagreement_threshold` | `0.3` | Dual mode: largest per-dimension gap that still counts as agreement |
 | `require_citations` | `true` | Score `citation_accuracy` for cases that have evidence |
@@ -210,9 +212,16 @@ The table below is generated from the application (`python scripts/gen_api_refer
 | `allow_new_critical_failures` | `false` | A new critical failure rolls the change back |
 | `category_minimums` | `{}` | Required minimum mean per category |
 | `max_latency_increase_pct` | `null` | Roll back when median latency grows more than this |
-| `eval_mode` | `single` | `deterministic`, `single` or `dual` |
+| `eval_mode` | `single` | `deterministic`, `single`, `dual` or `panel` |
+| `eval_config` | `{}` | Evaluation configuration for every round, for example `{"reviewers": 3, "testers": 4}` |
 | `run_holdout` | `true` | Validate the final candidate on the sealed holdout |
 | `limits` | `{}` | Same keys as above; applied to the whole optimization run |
+
+### Dataset generation (`POST /datasets:generate`)
+
+`testers` (1 to 8, default 1) sets how many independent tester agents write the tests. Each
+tester gets its own share of the passages, its own model context and its own persona; every case
+records which tester wrote it in `provenance.tester`.
 
 ### Dataset import file
 

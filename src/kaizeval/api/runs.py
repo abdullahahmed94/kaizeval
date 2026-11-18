@@ -42,7 +42,8 @@ router = APIRouter(prefix="/workspaces/{workspace_id}")
 class RunCreate(BaseModel):
     agent_id: str
     dataset_id: str
-    mode: Literal["deterministic", "single", "dual"] = "single"
+    # single = 1 reviewer, dual = 2, panel = config.reviewers (2-7). config.testers (1-8) sets parallel testers.
+    mode: Literal["deterministic", "single", "dual", "panel"] = "single"
     split: Literal["regression", "holdout"] = "regression"
     agent_version: str = Field(default="baseline", max_length=80)
     config: dict[str, Any] = Field(default_factory=dict)

@@ -25,6 +25,7 @@ function GenerateForm() {
   const [agentId, setAgentId] = useState("");
   const [specId, setSpecId] = useState("");
   const [nCases, setNCases] = useState("20");
+  const [testers, setTesters] = useState("3");
   const [holdout, setHoldout] = useState("30");
   const [seed, setSeed] = useState("0");
   const [categories, setCategories] = useState<string[]>(CATEGORIES.map((item) => item.id));
@@ -38,7 +39,7 @@ function GenerateForm() {
     void action.run(async () => {
       const result = await api.generateDataset({
         name: name.trim(), agent_id: agentId || null, specification_id: specId || null,
-        n_cases: Number(nCases), holdout_fraction: Number(holdout) / 100, seed: Number(seed) || 0,
+        n_cases: Number(nCases), testers: Math.min(8, Math.max(1, Number(testers) || 1)), holdout_fraction: Number(holdout) / 100, seed: Number(seed) || 0,
         categories, include_multi_turn: multiTurn, unanswerable_share: Number(unanswerable) / 100,
         languages: languages.split(",").map((item) => item.trim()).filter(Boolean),
       });
@@ -78,6 +79,9 @@ function GenerateForm() {
           </Field>
           <Field label="Number of cases" hint="Between 4 and 500.">
             <input type="number" value={nCases} min={4} max={500} step={1} onChange={(event) => setNCases(event.target.value)} required />
+          </Field>
+          <Field label="Number of testers" hint="Between 1 and 8. Each tester writes its own share of the tests independently, with its own angle.">
+            <input type="number" value={testers} min={1} max={8} step={1} onChange={(event) => setTesters(event.target.value)} required />
           </Field>
           <Field label="Holdout share (%)" hint="0 to 60. Kept sealed for the final, independent check.">
             <input type="number" value={holdout} min={0} max={60} step={1} onChange={(event) => setHoldout(event.target.value)} required />

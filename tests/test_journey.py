@@ -444,3 +444,54 @@ def test_orphaned_jobs_and_runs_are_recovered(ready):
     assert s.get(f"/ws/jobs/{job_id}")["status"] == "failed"
     failed = s.get(f"/ws/evaluation-runs/{run_id}")
     assert failed["status"] == "failed" and "worker stopped" in failed["error"]
+
+
+# --- choosing how many testers and reviewers ----------------------------------------------
+
+
+def test_panel_of_reviewers_and_parallel_testers(ready):
+    from kaizeval.services.evaluation import reviewer_count, tester_count
+
+    assert [reviewer_count(m, {"reviewers": 5}) for m in ("deterministic", "single", "dual", "panel")] == [0, 1, 2, 5]
+    assert reviewer_count("panel", {"reviewers": 99}) == 7 and reviewer_count("panel", {}) == 3
+    assert tester_count({"testers": 99}) == 8 and tester_count({}) == 1
+
+    s = ready["s"]
+    run = run_eval(s, ready["agent_id"], ready["dataset_id"], mode="panel", config={"reviewers": 3, "testers": 4})
+    assert run["status"] == "completed" and run["summary"]["reviewers"] == 3 and run["summary"]["testers"] == 4
+    assert run["config"]["reviewers"] == 3 and run["config"]["testers"] == 4
+    usage = run["summary"]["model_usage"]["by_role"]
+    # three reviewers per judged answer: two through the primary role, one through the secondary
+    assert usage["evaluator_primary"]["calls"] == 2 * usage["evaluator_secondary"]["calls"] > 0
+    results = s.get(f"/ws/evaluation-runs/{run['id']}/results", params={"limit": 200})["items"]
+    judged = next(r for r in results if len(r["judgments"]) >= 3)
+    assert [j["reviewer"] for j in judged["judgments"][:3]] == [1, 2, 3]
+    assert [j["task"] for j in judged["judgments"][:3]] == ["judge.primary", "judge.secondary", "judge.primary"]
+    assert judged["final"]["judge"]["reviewers"] == 3
+    assert run["summary"]["evaluator_agreement"]["compared"] > 0
+    # running the testers in parallel must not change any result
+    sequential = run_eval(s, ready["agent_id"], ready["dataset_id"], mode="panel", config={"reviewers": 3, "testers": 1})
+    assert sequential["summary"]["overall"] == run["summary"]["overall"]
+    assert sequential["summary"]["by_category"] == run["summary"]["by_category"]
+    assert len(results) == sequential["summary"]["cases"]
+
+
+def test_several_independent_testers_write_the_tests(client, sample_agent):
+    s = new_user(client)
+    setup_fake_model(s)
+    agent_id = setup_sample_agent(s, sample_agent)
+    upload_kb(s)
+    dataset_id = generate_dataset(s, agent_id, n_cases=24, testers=3)
+    cases = s.get(f"/ws/datasets/{dataset_id}/cases", params={"limit": 200})["items"]
+    written = [c for c in cases if c["category"] != "unanswerable"]
+    assert {c["provenance"]["tester"] for c in written} == {1, 2, 3}
+    assert len({c["provenance"]["persona"] for c in written}) == 3
+    questions = [c["turns"][0]["content"] for c in cases]
+    assert len(questions) == len(set(questions))
+    # each tester worked on its own passages
+    by_tester: dict[int, set[str]] = {}
+    for case in written:
+        by_tester.setdefault(case["provenance"]["tester"], set()).add(case["evidence_refs"][0]["chunk_id"])
+    assert not (by_tester[1] & by_tester[2]) and not (by_tester[2] & by_tester[3])
+    assert set(s.get(f"/ws/datasets/{dataset_id}/coverage")["regression"]["by_tester"]) >= {"1", "2", "3"}
+    s.post("/ws/datasets:generate", expect=422, json={"name": "x", "n_cases": 10, "testers": 9})

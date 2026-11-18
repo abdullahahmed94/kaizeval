@@ -12,7 +12,7 @@ from pathlib import Path
 from packaging.requirements import Requirement
 
 ROOT = "kaizeval"
-EXTRAS = {"postgres", "s3"}  # optional runtime extras are listed too, when installed
+EXTRAS = {"postgres", "s3", "mcp"}  # optional runtime extras are listed too, when installed
 COPYLEFT = re.compile(r"\b(AGPL|GPL|LGPL|SSPL|EUPL|CC-BY-NC)\b", re.IGNORECASE)
 
 

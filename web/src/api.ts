@@ -217,6 +217,7 @@ export interface DatasetGenerateInput {
   agent_id: string | null;
   specification_id: string | null;
   n_cases: number;
+  testers: number;
   holdout_fraction: number;
   seed: number;
   categories: string[];

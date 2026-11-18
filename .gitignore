@@ -35,3 +35,6 @@ secret.key
 .idea/
 .DS_Store
 Thumbs.db
+
+# Output of `kaizeval run` in a project folder
+kaizeval-report.md

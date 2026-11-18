@@ -50,6 +50,10 @@ inconsistencies, resolved as follows:
 
 ## Additions beyond the blueprint
 
+- Project mode (`kaizeval init` / `run` / `release`): the whole journey from one file with an
+  embedded engine, usable from a terminal, CI or a coding assistant.
+- Selectable numbers of independent testers (1-8) and reviewers (0-7).
+- An MCP server exposing the journey as tools.
 - `kaizeval ci` and a GitHub Action: fail a pipeline when the agent's score drops or regresses.
 - Statistical verdict on every A/B comparison (`improved` / `regressed` / `inconclusive`).
 - Refusal to compare runs that were scored with different evaluation modes.

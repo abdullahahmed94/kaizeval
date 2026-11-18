@@ -1,4 +1,4 @@
-"""Command line interface: serve, worker, sample-agent, demo, ci, migrate."""
+"""Command line interface: init, run, release, serve, worker, demo, ci, mcp, sample-agent, migrate."""
 
 from __future__ import annotations
 
@@ -12,9 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from . import __version__
+from .client import Api
 
 EXIT_OK, EXIT_QUALITY_GATE, EXIT_ERROR = 0, 1, 2
 
@@ -39,37 +38,6 @@ def _start_thread(app: Any, host: str, port: int) -> Any:
             raise RuntimeError(f"could not start a server on {host}:{port} (is the port in use?)")
         time.sleep(0.05)
     return server
-
-
-class Api:
-    """Minimal client for the Kaizeval REST API (used by `demo` and `ci`)."""
-
-    def __init__(self, base_url: str, token: str | None = None):
-        self.base = base_url.rstrip("/") + "/api/v1"
-        self.client = httpx.Client(timeout=120, trust_env=False)
-        self.token = token
-
-    def call(self, method: str, path: str, **kwargs: Any) -> Any:
-        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
-        response = self.client.request(method, self.base + path, headers=headers, **kwargs)
-        if response.status_code >= 400:
-            try:
-                error = response.json().get("error", {})
-            except ValueError:
-                error = {"code": "HTTP_ERROR", "message": response.text[:200]}
-            raise RuntimeError(f"{error.get('code')}: {error.get('message')}")
-        return response.json() if response.content else None
-
-    def wait_job(self, ws: str, job: dict[str, Any], timeout: float = 1800) -> dict[str, Any]:
-        deadline = time.time() + timeout
-        while job["status"] in ("queued", "running"):
-            if time.time() > deadline:
-                raise RuntimeError("timed out waiting for the job to finish")
-            time.sleep(0.4)
-            job = self.call("GET", f"/workspaces/{ws}/jobs/{job['id']}")
-        if job["status"] == "failed":
-            raise RuntimeError(job.get("error") or "job failed")
-        return job
 
 
 # --- demo ---------------------------------------------------------------------------------
@@ -239,6 +207,70 @@ def cmd_ci(args: argparse.Namespace) -> int:
     return EXIT_QUALITY_GATE if failures else EXIT_OK
 
 
+# --- project mode -------------------------------------------------------------------------
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    from .project import ProjectError, write_template
+
+    try:
+        path = write_template(Path(args.directory), force=args.force)
+    except ProjectError as exc:
+        print(f"kaizeval init: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    print(f"created {path}\n\nNext:\n  1. edit it: point `agent.url` at your agent and `model` at your model\n"
+          "  2. kaizeval run\n\nTip: add `.kaizeval/` to your .gitignore (it holds local state and a local login).")
+    return EXIT_OK
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run the whole journey from kaizeval.yaml and exit 0 when the target score is met."""
+    from .project import ProjectError, format_result, release, run_project
+
+    quiet = args.json
+    log = (lambda message: print(message, file=sys.stderr)) if quiet else print
+    try:
+        result = run_project(Path(args.config), url=args.url, holdout=args.holdout, regenerate=args.regenerate,
+                             reset_baseline=args.reset_baseline, log=log)
+    except ProjectError as exc:
+        print(f"kaizeval run: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    print(json.dumps(result, indent=2) if quiet else format_result(result))
+    candidate = ((result.get("optimization") or {}).get("candidate") or {})
+    if candidate.get("status") == "awaiting_decision" and not quiet and not args.no_input and sys.stdin.isatty():
+        # The release decision always belongs to a person.
+        answer = input("\nPromote Candidate B to production? [y/N] ").strip().lower()
+        try:
+            outcome = release(Path(args.config), "approve" if answer in ("y", "yes") else "reject", url=args.url, log=log)
+        except ProjectError as exc:
+            print(f"kaizeval release: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+        print(f"decision recorded: {outcome['decision']} (candidate is now {outcome['candidate_status']})")
+    return EXIT_OK if result["target_met"] else EXIT_QUALITY_GATE
+
+
+def cmd_release(args: argparse.Namespace) -> int:
+    from .project import ProjectError, release
+
+    try:
+        outcome = release(Path(args.config), args.decision, url=args.url, note=args.note)
+    except ProjectError as exc:
+        print(f"kaizeval release: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    print(json.dumps(outcome, indent=2))
+    return EXIT_OK
+
+
+def cmd_mcp(_: argparse.Namespace) -> int:
+    try:
+        from .mcp_server import main as serve_mcp
+    except ImportError:
+        print("the MCP server needs the optional dependency: pip install 'kaizeval[mcp]'", file=sys.stderr)
+        return EXIT_ERROR
+    serve_mcp()
+    return EXIT_OK
+
+
 # --- entry point --------------------------------------------------------------------------
 
 
@@ -289,6 +321,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"kaizeval {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("init", help="create a kaizeval.yaml project file in this folder")
+    p.add_argument("directory", nargs="?", default=".")
+    p.add_argument("--force", action="store_true", help="overwrite an existing file")
+    p.set_defaults(fn=cmd_init)
+
+    p = sub.add_parser("run", help="run the whole journey from kaizeval.yaml (connect, test, review, recommend, compare)")
+    p.add_argument("-c", "--config", default="kaizeval.yaml")
+    p.add_argument("--url", default=None, help="use a running Kaizeval server instead of a local engine")
+    p.add_argument("--holdout", action="store_true", help="also run the final check on the sealed holdout")
+    p.add_argument("--regenerate", action="store_true", help="generate a new test set (resets the baseline)")
+    p.add_argument("--reset-baseline", action="store_true", help="make this run the new baseline for comparisons")
+    p.add_argument("--json", action="store_true", help="print the result as JSON (progress goes to stderr)")
+    p.add_argument("--no-input", action="store_true", help="never ask a question on the terminal")
+    p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("release", help="approve (and promote) or reject the candidate of the last optimization")
+    p.add_argument("decision", choices=["approve", "reject"])
+    p.add_argument("-c", "--config", default="kaizeval.yaml")
+    p.add_argument("--url", default=None)
+    p.add_argument("--note", default=None)
+    p.set_defaults(fn=cmd_release)
+
+    p = sub.add_parser("mcp", help="serve Kaizeval as MCP tools over stdio, for coding assistants")
+    p.set_defaults(fn=cmd_mcp)
+
     p = sub.add_parser("serve", help="run the API and web console")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
@@ -318,7 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace", required=True)
     p.add_argument("--agent", required=True)
     p.add_argument("--dataset", required=True)
-    p.add_argument("--mode", choices=["deterministic", "single", "dual"], default="deterministic")
+    p.add_argument("--mode", choices=["deterministic", "single", "dual", "panel"], default="deterministic")
     p.add_argument("--agent-version", default="baseline")
     p.add_argument("--fail-under", type=float, default=0.8, help="minimum overall score (0-1)")
     p.add_argument("--max-critical", type=int, default=0, help="maximum allowed critical failures")

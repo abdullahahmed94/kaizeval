@@ -26,6 +26,18 @@ from ..models import Dataset, Document, TestCase
 from ..textutil import normalize, overlap_recall
 
 ANSWERABLE_CATEGORIES = ["knowledge", "citation", "edge_case"]
+MAX_TESTERS = 8
+# Each tester writes its own tests independently, from its own share of the knowledge and with its own angle.
+TESTER_PERSONAS = [
+    "an everyday customer who asks direct, practical questions",
+    "an edge-case hunter who writes terse, oddly phrased or slightly misspelled questions",
+    "a sceptical auditor who wants the exact source, numbers and conditions",
+    "a confused newcomer who mixes up terms and asks vague questions",
+    "a power user who asks detailed, multi-part questions",
+    "an impatient user who writes very short messages",
+    "a careful reader who asks about exceptions and limits",
+    "a non-native speaker who uses simple wording",
+]
 SEVERITIES = ["low", "normal", "high", "critical"]
 
 
@@ -94,7 +106,7 @@ def _split(cases: list[dict[str, Any]], fraction: float, seed: int) -> None:
 def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: int, categories: list[str],
                  include_multi_turn: bool, unanswerable_share: float, languages: list[str],
                  document_ids: list[str] | None, seed: int, variation: int, existing_questions: set[str],
-                 notes: list[str]) -> tuple[list[dict[str, Any]], bool]:
+                 notes: list[str], testers: int = 1) -> tuple[list[dict[str, Any]], bool]:
     provider = DocumentGroundTruthProvider(db, workspace_id)
     chunks = [(c, d) for c, d in current_kb_chunks(db, workspace_id, document_ids) if len(c.text) >= 60]
     if not chunks:
@@ -117,21 +129,26 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
     by_ref = {f"chunk:{c.id}": (c, d) for c, d in selected}
     synthetic = False
 
+    testers = max(1, min(MAX_TESTERS, int(testers), len(selected)))
     questions: list[dict[str, Any]] = []
-    for start in range(0, len(selected), 4):
-        batch = selected[start:start + 4]
-        out, meta = gateway.generate("generate.questions", {
-            "chunks": [{"ref": f"chunk:{c.id}", "section": c.section, "document": d.filename, "text": c.text} for c, d in batch],
-            "per_chunk": per_chunk, "categories": answerable_categories, "include_multi_turn": include_multi_turn,
-            "variation": variation,
-        })
-        synthetic = synthetic or meta.synthetic
-        for q in out.questions:
-            key = normalize(q.question)
-            if q.chunk_ref not in by_ref or not q.question.strip() or key in existing_questions:
-                continue
-            existing_questions.add(key)
-            questions.append(q.model_dump())
+    for tester in range(testers):
+        # Round-robin split: every tester works on its own passages, in its own model context.
+        share = selected[tester::testers]
+        persona = TESTER_PERSONAS[tester % len(TESTER_PERSONAS)]
+        for start in range(0, len(share), 4):
+            batch = share[start:start + 4]
+            out, meta = gateway.generate("generate.questions", {
+                "chunks": [{"ref": f"chunk:{c.id}", "section": c.section, "document": d.filename, "text": c.text} for c, d in batch],
+                "per_chunk": per_chunk, "categories": answerable_categories, "include_multi_turn": include_multi_turn,
+                "variation": variation + tester, "persona": persona,
+            })
+            synthetic = synthetic or meta.synthetic
+            for q in out.questions:
+                key = normalize(q.question)
+                if q.chunk_ref not in by_ref or not q.question.strip() or key in existing_questions:
+                    continue
+                existing_questions.add(key)
+                questions.append({**q.model_dump(), "tester": tester + 1, "persona": persona})
 
     items = []
     for index, q in enumerate(questions):
@@ -177,7 +194,8 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
             "expected": expected, "answer_status": verification.status,
             "evidence_refs": [ref for ref in [provider.evidence_ref(chunk_row.id, quote)] if ref],
             "provenance": {"origin": "generated", "verification": verification.detail,
-                           "generator": "fake" if synthetic else "model"},
+                           "generator": "fake" if synthetic else "model",
+                           "tester": q.get("tester", 1), "persona": q.get("persona", "")},
         })
 
     if n_unanswerable:
@@ -236,7 +254,8 @@ def generate_dataset(db: Session, dataset: Dataset, params: dict[str, Any]) -> D
         categories=params.get("categories") or ANSWERABLE_CATEGORIES,
         include_multi_turn=bool(params.get("include_multi_turn", True)),
         unanswerable_share=float(params.get("unanswerable_share", 0.2)), languages=params.get("languages") or [],
-        document_ids=params.get("document_ids"), seed=dataset.seed, variation=0, existing_questions=set(), notes=notes)
+        document_ids=params.get("document_ids"), seed=dataset.seed, variation=0, existing_questions=set(), notes=notes,
+        testers=int(params.get("testers") or 1))
     if len(cases) < 2:
         raise DatasetError("the generator produced fewer than two usable cases")
     _split(cases, dataset.holdout_fraction, dataset.seed)
@@ -392,6 +411,7 @@ def coverage(db: Session, dataset: Dataset) -> dict[str, Any]:
             "by_language": dict(Counter(c.language for c in regression)),
             "by_answer_status": dict(Counter(c.answer_status for c in regression)),
             "by_document": dict(per_document),
+            "by_tester": dict(Counter(str((c.provenance or {}).get("tester", "imported")) for c in regression)),
             "multi_turn": sum(1 for c in regression if len(c.turns or []) > 1),
             "stale": sum(1 for c in regression if c.stale),
         },

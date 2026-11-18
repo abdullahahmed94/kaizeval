@@ -22,6 +22,11 @@ provider on its own.
 | `root_cause` | Failure hypotheses | `root_cause` |
 | `optimizer` | Proposes one candidate configuration change | `optimize` |
 
+With more than two reviewers (panel mode), reviewers alternate between `evaluator_primary` and
+`evaluator_secondary`, each call in its own context, so two different models can be mixed in one
+panel. Several testers (`testers` in dataset generation) all use the `test_generator` role, each
+with its own context and persona.
+
 Assign a `default` policy and, optionally, an override per role
 (`PUT /model-role-policies/{role}`): provider, model name, temperature, max tokens, timeout.
 Several roles may share a model. Using a different model family for the secondary judge reduces,

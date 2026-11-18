@@ -282,4 +282,16 @@ def make_pdf(pages: list[str]) -> bytes:
     return out
 
 
+@pytest.fixture(scope="session")
+def live_server():
+    """The API served over real HTTP (same database as the in-process test client)."""
+    from kaizeval import handlers  # noqa: F401
+    from kaizeval.db import upgrade_db
+
+    upgrade_db()
+    url, server = serve(create_app())
+    yield url
+    server.should_exit = True
+
+
 DATA_DIR = Path(_TMP)

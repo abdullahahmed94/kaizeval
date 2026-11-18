@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import statistics
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from sqlalchemy import select
@@ -34,6 +35,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "abstention": 1.0, "multi_turn_consistency": 0.15, "language": 0.15, "instruction_compliance": 0.1},
     "limits": {},  # max_model_calls, max_model_tokens, max_model_cost, max_agent_calls
 }
+MAX_REVIEWERS, MAX_TESTERS = 7, 8
+MODES = ("deterministic", "single", "dual", "panel")
+
+
+def reviewer_count(mode: str, config: dict[str, Any] | None) -> int:
+    """How many independent model reviewers score each answer: 0 (deterministic), 1, 2, or a panel of 2-7."""
+    if mode == "deterministic":
+        return 0
+    if mode == "single":
+        return 1
+    if mode == "dual":
+        return 2
+    return max(2, min(MAX_REVIEWERS, int((config or {}).get("reviewers") or 3)))
+
+
+def tester_count(config: dict[str, Any] | None) -> int:
+    """How many testers call the agent in parallel."""
+    return max(1, min(MAX_TESTERS, int((config or {}).get("testers") or 1)))
+
+
 JUDGE_DIMENSIONS = ["correctness", "groundedness", "relevance", "multi_turn_consistency", "abstention"]
 FATAL_MODEL_CODES = {"BUDGET_EXCEEDED", "TIMEOUT", "CONNECTION", "AUTH", "EGRESS_BLOCKED", "MODEL_NOT_CONFIGURED",
                      "PREFLIGHT_REQUIRED", "RATE_LIMITED", "PROVIDER_ERROR"}
@@ -52,17 +73,20 @@ def merged_config(config: dict[str, Any] | None) -> dict[str, Any]:
 def create_run(db: Session, *, workspace_id: str, agent_id: str, dataset_id: str, split: str, mode: str,
                kind: str, agent_version: str = "baseline", config: dict[str, Any] | None = None,
                user_id: str | None = None, optimization_run_id: str | None = None) -> EvaluationRun:
-    if mode not in ("deterministic", "single", "dual"):
-        raise EvaluationError("mode must be 'deterministic', 'single' or 'dual'")
+    if mode not in MODES:
+        raise EvaluationError("mode must be 'deterministic', 'single', 'dual' or 'panel'")
     dataset = db.get(Dataset, dataset_id)
     agent = db.get(Agent, agent_id)
     if dataset is None or agent is None or dataset.workspace_id != workspace_id or agent.workspace_id != workspace_id:
         raise EvaluationError("agent or dataset not found in this workspace")
     if dataset.status != "ready":
         raise EvaluationError("the dataset is not ready")
+    full_config = merged_config(config)
+    full_config["reviewers"] = reviewer_count(mode, full_config)
+    full_config["testers"] = tester_count(full_config)
     run = EvaluationRun(workspace_id=workspace_id, agent_id=agent_id, dataset_id=dataset_id,
                         dataset_version=dataset.version, split=split, kind=kind, agent_version=agent_version,
-                        mode=mode, config=merged_config(config), created_by=user_id,
+                        mode=mode, config=full_config, created_by=user_id,
                         optimization_run_id=optimization_run_id)
     db.add(run)
     db.flush()
@@ -167,37 +191,42 @@ def _judge_inputs(db: Session, case: TestCase, replies: list[dict[str, Any]], di
 
 def _judge(db: Session, gateway: Gateway, run: EvaluationRun, case: TestCase, replies: list[dict[str, Any]],
            dims: list[str], config: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Returns (recorded judgments, merged judge view). Each judge gets its own independent context."""
+    """Returns (recorded judgments, merged view). Every reviewer gets its own independent context."""
     inputs = _judge_inputs(db, case, replies, dims)
     judgments: list[dict[str, Any]] = []
 
-    def call(task: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def call(task: str, payload: dict[str, Any], reviewer: int | None = None) -> dict[str, Any]:
         result, meta = gateway.generate(task, payload)
         record = {"task": task, "role": meta.role, "model": meta.model, "prompt_version": meta.prompt_version,
-                  "synthetic": meta.synthetic, **result.model_dump()}
+                  "synthetic": meta.synthetic, "reviewer": reviewer, **result.model_dump()}
         judgments.append(record)
         return record
 
-    first = call("judge.primary", inputs)
+    reviewers = reviewer_count(run.mode, config)
+    # Each reviewer receives the same case, rubric and evidence and nothing from the other reviewers.
+    # Reviewers alternate between the two evaluator roles, so two different models can be mixed.
+    panel = [call("judge.primary" if index % 2 == 0 else "judge.secondary", inputs, index + 1)
+             for index in range(reviewers)]
+    first = panel[0]
     merged: dict[str, Any] = {"scores": first["scores"], "verdict": first["verdict"], "confidence": first["confidence"],
-                              "agreement": None, "arbitrated": False, "needs_human_review": False}
-    if run.mode != "dual":
+                              "agreement": None, "arbitrated": False, "needs_human_review": False,
+                              "reviewers": reviewers}
+    if reviewers == 1:
         return judgments, merged
 
-    # The second judge receives the same case, rubric and evidence, and nothing from the first judge.
-    second = call("judge.secondary", inputs)
-    shared = [d for d in dims if d in first["scores"] and d in second["scores"]]
-    gap = max((abs(first["scores"][d] - second["scores"][d]) for d in shared), default=0.0)
-    agree = gap <= float(config["disagreement_threshold"]) and first["verdict"] == second["verdict"]
-    # Critical cases go to the arbiter whenever either judge is not confident it passed.
-    critical_doubt = case.severity == "critical" and (first["verdict"] != "pass" or second["verdict"] != "pass")
+    shared = [d for d in dims if all(d in j["scores"] for j in panel)]
+    gap = max((max(j["scores"][d] for j in panel) - min(j["scores"][d] for j in panel) for d in shared), default=0.0)
+    verdicts = {j["verdict"] for j in panel}
+    agree = gap <= float(config["disagreement_threshold"]) and len(verdicts) == 1
+    # Critical cases go to the arbiter whenever any reviewer is not confident it passed.
+    critical_doubt = case.severity == "critical" and verdicts != {"pass"}
     merged.update({"agreement": agree, "max_gap": round(gap, 4)})
     if agree and not critical_doubt:
-        merged["scores"] = {d: round((first["scores"][d] + second["scores"][d]) / 2, 4) for d in shared}
-        merged["confidence"] = round(min(first["confidence"], second["confidence"]), 4)
+        merged["scores"] = {d: round(statistics.fmean(j["scores"][d] for j in panel), 4) for d in shared}
+        merged["confidence"] = round(min(j["confidence"] for j in panel), 4)
         return judgments, merged
     decision = call("arbiter", {**inputs, "judgments": [
-        {"scores": j["scores"], "verdict": j["verdict"], "rationale": j["rationale"]} for j in (first, second)]})
+        {"scores": j["scores"], "verdict": j["verdict"], "rationale": j["rationale"]} for j in panel]})
     merged.update({"scores": decision["scores"], "verdict": decision["verdict"], "confidence": decision["confidence"],
                    "arbitrated": True, "needs_human_review": bool(decision.get("needs_human_review"))})
     return judgments, merged
@@ -290,8 +319,9 @@ def summarize(db: Session, run: EvaluationRun, results: list[CaseResult], cases:
                           "not a real semantic evaluation.")
     if any(m == "model_judge" for values in by_dim.values() for _, m in values):
         caveats.append("Dimensions scored by a model judge are estimates, not verified facts.")
-    if run.mode == "dual":
-        caveats.append("Agreement between two judges is not ground truth; judges can share the same bias.")
+    reviewers = reviewer_count(run.mode, run.config)
+    if reviewers > 1:
+        caveats.append("Agreement between reviewers is not ground truth; model reviewers can share the same bias.")
     if len(scored) < len(results):
         caveats.append(f"{len(results) - len(scored)} case(s) could not be scored (no verified reference or judge).")
     return {
@@ -311,7 +341,8 @@ def summarize(db: Session, run: EvaluationRun, results: list[CaseResult], cases:
         "agent_errors": sum(1 for r in results if r.error),
         "evaluator_agreement": {"compared": len(dual), "agreed": sum(1 for d in dual if d.get("agreement")),
                                 "rate": round(sum(1 for d in dual if d.get("agreement")) / len(dual), 4) if dual else None,
-                                "arbitrated": sum(1 for d in dual if d.get("arbitrated"))} if run.mode == "dual" else None,
+                                "arbitrated": sum(1 for d in dual if d.get("arbitrated"))} if reviewers > 1 else None,
+        "reviewers": reviewers, "testers": tester_count(run.config),
         "latency_ms": {"p50": _percentile(latencies, 0.5), "p95": _percentile(latencies, 0.95),
                        "mean": int(statistics.fmean(latencies)) if latencies else 0},
         "agent": {"calls": sum(len(r.response.get("turns", [])) or 1 for r in results),
@@ -350,7 +381,7 @@ def execute_run(db: Session, run_id: str, *, ctx: JobContext | None = None,
         return fail(f"the dataset has no {run.split} cases")
     if run.mode != "deterministic":
         # Fail before touching the agent: model-dependent steps never start without a verified model.
-        roles = ["evaluator_primary"] + (["evaluator_secondary", "arbiter"] if run.mode == "dual" else [])
+        roles = ["evaluator_primary"] + (["evaluator_secondary", "arbiter"] if reviewer_count(run.mode, config) > 1 else [])
         for role in roles:
             try:
                 provider, _ = gateway.resolve(role)
@@ -375,77 +406,94 @@ def execute_run(db: Session, run_id: str, *, ctx: JobContext | None = None,
     if ctx:
         ctx.progress(run_id=run.id, total=len(cases), done=0)
     repeats = max(1, int(config.get("repeats", 1)))
+    testers = tester_count(config)
     max_agent_calls = limits.get("max_agent_calls")
     agent_calls, consecutive_errors, stop_error = 0, 0, None
     done_ids = {r.case_id for r in db.scalars(select(CaseResult).where(CaseResult.run_id == run.id))}
+    pending = [c for c in cases if c.id not in done_ids]
+    completed, position = len(cases) - len(pending), 0
 
-    for index, case in enumerate(cases):
-        if case.id in done_ids:
-            continue
-        if ctx and ctx.cancelled():
-            run.status, run.finished_at = "cancelled", utcnow()
-            db.commit()
-            raise JobCancelled()
-        turns = len(case.turns or []) or 1
-        if max_agent_calls is not None and agent_calls + turns * repeats > max_agent_calls:
-            stop_error = f"BUDGET_EXCEEDED: agent call budget reached ({max_agent_calls})"
-            break
-        attempts: list[dict[str, Any]] = []
-        shown: dict[str, Any] | None = None
-        for _ in range(repeats):
-            replies, latency, cost, error = _invoke_case(adapter, case, run.agent_version)
-            agent_calls += turns
-            dims = dimensions_for(case, config)
-            det = {} if error else deterministic_checks(case, replies, config)
-            judgments: list[dict[str, Any]] = []
-            judge_view: dict[str, Any] | None = None
-            judge_error = None
-            wanted = [d for d in dims if d in JUDGE_DIMENSIONS and not (det.get(d) or {}).get("decisive")]
-            if run.mode != "deterministic" and not error and wanted:
-                try:
-                    judgments, judge_view = _judge(db, gateway, run, case, replies, wanted, config)
-                except GatewayError as exc:
-                    if exc.code in FATAL_MODEL_CODES:
-                        stop_error = f"{exc.code}: {exc.message}"
-                        break
-                    judge_error = f"{exc.code}: {exc.message}"
-            final = finalize_case(case, dims, det, judge_view, config, error)
-            if judge_view:
-                final["judge"] = {k: judge_view[k] for k in ("agreement", "arbitrated", "confidence", "verdict") if k in judge_view}
-            if judge_error:
-                final["judge_error"], final["needs_human_review"] = judge_error, True
-            attempt = {"replies": replies, "latency": latency, "cost": cost, "error": error, "det": det,
-                       "judgments": judgments, "final": final}
-            attempts.append(attempt)
-            shown = shown or attempt
-        if stop_error:
-            break
-        assert shown is not None
-        final = dict(shown["final"])
-        overalls = [a["final"]["overall"] for a in attempts if a["final"]["overall"] is not None]
-        if repeats > 1 and overalls:
-            final["overall"] = round(statistics.fmean(overalls), 4)
-            final["attempt_overalls"] = overalls
-            final["verdict"] = "pass" if final["overall"] >= float(config["pass_threshold"]) else "fail"
-            final["critical_failure"] = case.severity == "critical" and final["verdict"] == "fail"
-        verdict = "needs_human_review" if final.get("needs_human_review") and final["verdict"] != "n/a" and (
-            (shown["final"].get("judge") or {}).get("verdict") == "uncertain") else final["verdict"]
-        db.add(CaseResult(
-            workspace_id=run.workspace_id, run_id=run.id, case_id=case.id, split=run.split,
-            response={"turns": shown["replies"], "text": shown["replies"][-1]["text"] if shown["replies"] else "",
-                      "citations": [c for r in shown["replies"] for c in r["citations"]]},
-            latency_ms=int(statistics.fmean([a["latency"] for a in attempts])),
-            agent_cost=sum(a["cost"] for a in attempts if a["cost"] is not None) if any(a["cost"] is not None for a in attempts) else None,
-            error=shown["error"], deterministic=shown["det"], judgments=shown["judgments"], final=final,
-            overall=final["overall"], verdict=verdict,
-        ))
-        consecutive_errors = consecutive_errors + 1 if shown["error"] else 0
-        db.commit()
-        if ctx:
-            ctx.progress(done=index + 1)
-        if consecutive_errors >= 5:
-            stop_error = f"the agent failed 5 times in a row ({shown['error']})"
-            break
+    def test(case: TestCase) -> list[tuple[list[dict[str, Any]], int, float | None, str | None]]:
+        return [_invoke_case(adapter, case, run.agent_version) for _ in range(repeats)]
+
+    with ThreadPoolExecutor(max_workers=testers, thread_name_prefix="kaizeval-tester") as pool:
+        while position < len(pending) and not stop_error:
+            if ctx and ctx.cancelled():
+                run.status, run.finished_at = "cancelled", utcnow()
+                db.commit()
+                raise JobCancelled()
+            batch: list[TestCase] = []
+            for case in pending[position:position + testers]:
+                turns = len(case.turns or []) or 1
+                if max_agent_calls is not None and agent_calls + turns * repeats > max_agent_calls:
+                    stop_error = f"BUDGET_EXCEEDED: agent call budget reached ({max_agent_calls})"
+                    break
+                agent_calls += turns * repeats
+                batch.append(case)
+            position += len(batch)
+            if not batch:
+                break
+            # Testers call the agent independently and in parallel. Only when their answers are in
+            # do the reviewers score them, so no reviewer output can influence a tester.
+            answered = list(pool.map(test, batch))
+            for case, raw_attempts in zip(batch, answered, strict=True):
+                attempts: list[dict[str, Any]] = []
+                shown: dict[str, Any] | None = None
+                for replies, latency, cost, error in raw_attempts:
+                    dims = dimensions_for(case, config)
+                    det = {} if error else deterministic_checks(case, replies, config)
+                    judgments: list[dict[str, Any]] = []
+                    judge_view: dict[str, Any] | None = None
+                    judge_error = None
+                    wanted = [d for d in dims if d in JUDGE_DIMENSIONS and not (det.get(d) or {}).get("decisive")]
+                    if run.mode != "deterministic" and not error and wanted:
+                        try:
+                            judgments, judge_view = _judge(db, gateway, run, case, replies, wanted, config)
+                        except GatewayError as exc:
+                            if exc.code in FATAL_MODEL_CODES:
+                                stop_error = f"{exc.code}: {exc.message}"
+                                break
+                            judge_error = f"{exc.code}: {exc.message}"
+                    final = finalize_case(case, dims, det, judge_view, config, error)
+                    if judge_view:
+                        final["judge"] = {k: judge_view[k] for k in ("agreement", "arbitrated", "confidence", "verdict", "reviewers")
+                                          if k in judge_view}
+                    if judge_error:
+                        final["judge_error"], final["needs_human_review"] = judge_error, True
+                    attempt = {"replies": replies, "latency": latency, "cost": cost, "error": error, "det": det,
+                               "judgments": judgments, "final": final}
+                    attempts.append(attempt)
+                    shown = shown or attempt
+                if stop_error:
+                    break
+                assert shown is not None
+                final = dict(shown["final"])
+                overalls = [a["final"]["overall"] for a in attempts if a["final"]["overall"] is not None]
+                if repeats > 1 and overalls:
+                    final["overall"] = round(statistics.fmean(overalls), 4)
+                    final["attempt_overalls"] = overalls
+                    final["verdict"] = "pass" if final["overall"] >= float(config["pass_threshold"]) else "fail"
+                    final["critical_failure"] = case.severity == "critical" and final["verdict"] == "fail"
+                verdict = "needs_human_review" if final.get("needs_human_review") and final["verdict"] != "n/a" and (
+                    (shown["final"].get("judge") or {}).get("verdict") == "uncertain") else final["verdict"]
+                db.add(CaseResult(
+                    workspace_id=run.workspace_id, run_id=run.id, case_id=case.id, split=run.split,
+                    response={"turns": shown["replies"], "text": shown["replies"][-1]["text"] if shown["replies"] else "",
+                              "citations": [c for r in shown["replies"] for c in r["citations"]]},
+                    latency_ms=int(statistics.fmean([a["latency"] for a in attempts])),
+                    agent_cost=sum(a["cost"] for a in attempts if a["cost"] is not None)
+                    if any(a["cost"] is not None for a in attempts) else None,
+                    error=shown["error"], deterministic=shown["det"], judgments=shown["judgments"], final=final,
+                    overall=final["overall"], verdict=verdict,
+                ))
+                consecutive_errors = consecutive_errors + 1 if shown["error"] else 0
+                db.commit()
+                completed += 1
+                if ctx:
+                    ctx.progress(done=completed)
+                if consecutive_errors >= 5:
+                    stop_error = f"the agent failed 5 times in a row ({shown['error']})"
+                    break
     adapter.close()
 
     results = list(db.scalars(select(CaseResult).where(CaseResult.run_id == run.id)))

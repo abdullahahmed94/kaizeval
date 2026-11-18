@@ -146,6 +146,7 @@ class DatasetGenerate(BaseModel):
     agent_id: str | None = None
     specification_id: str | None = None
     n_cases: int = Field(default=20, ge=4, le=500)
+    testers: int = Field(default=1, ge=1, le=8)  # independent test-writing agents
     holdout_fraction: float = Field(default=0.3, ge=0.0, le=0.6)
     seed: int = 0
     categories: list[Literal["knowledge", "citation", "edge_case"]] = ["knowledge", "citation", "edge_case"]

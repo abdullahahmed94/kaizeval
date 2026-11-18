@@ -47,6 +47,11 @@ flowchart TD
 | Validate | Automatic | The optimizer never sees holdout questions, references or per-case results |
 | Release | Owner | Nothing is promoted without an explicit, recorded approval |
 
+The number of tester agents (1 to 8) and reviewer agents (0 to 7) is yours to choose, per dataset
+and per run. Testers write and run the tests independently; reviewers start only after the
+testers' answers are in. The quickest way to run this whole journey is one file and one command:
+see [PROJECT_MODE.md](PROJECT_MODE.md).
+
 ## 2. How one answer is scored
 
 ```mermaid

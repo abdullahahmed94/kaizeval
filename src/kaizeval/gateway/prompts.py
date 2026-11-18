@@ -50,9 +50,11 @@ _task("spec.infer", "specification_inference", "1", s.SpecDraft, """
     between 0 and 1. Each objective needs concrete acceptance_criteria. Put anything you assumed
     without evidence in assumptions and anything ambiguous or missing in open_questions.""")
 
-_task("generate.questions", "test_generator", "1", s.GeneratedQuestions, """
-    Write test questions that a real user could ask and that are answerable only from the given
-    chunk. Produce up to input.per_chunk questions for every chunk in input.chunks, using the
+_task("generate.questions", "test_generator", "2", s.GeneratedQuestions, """
+    You are one of several independent testers. Write test questions that a real user could ask and
+    that are answerable only from the given chunk. When input.persona is present, write them the way
+    that kind of user would: the wording and difficulty should reflect the persona while the facts
+    stay those of the chunk. Produce up to input.per_chunk questions for every chunk in input.chunks, using the
     categories in input.categories: "knowledge" (direct factual question), "citation" (the answer must
     name its source), "edge_case" (a paraphrased, terse or slightly misspelled version of a realistic
     question). When input.include_multi_turn is true, also add for some chunks one question with

@@ -1,0 +1,42 @@
+# Example project file for the bundled sample agent. Try it without any model or account:
+#
+#   kaizeval sample-agent --port 8101 --admin-token local-demo-token     (terminal 1)
+#   export SAMPLE_AGENT_ADMIN_TOKEN=local-demo-token                     (terminal 2)
+#   kaizeval run -c examples/kaizeval.yaml
+#
+# It uses the built-in FAKE model, so reviewer scores are SYNTHETIC. Replace the `model` block
+# with your own endpoint to get real reviews.
+project: sample-support-agent
+network: offline
+
+model:
+  kind: fake
+  # base_url: http://localhost:11434/v1
+  # model: your-model-name
+
+agent:
+  url: http://127.0.0.1:8101
+  candidate_protocol: true
+  admin_token_env: SAMPLE_AGENT_ADMIN_TOKEN
+
+requirements: |
+  Answer customer questions using only the company documents.
+  Always name the source document.
+  Say you do not know when the documents do not contain the answer.
+
+knowledge:
+  - ../src/kaizeval/sample_agent/kb/*.md
+
+tests:
+  cases: 30
+  testers: 3
+  holdout_fraction: 0.3
+  import: [approved-qa.csv]
+
+evaluation:
+  reviewers: 3
+  target: 1.0
+
+optimize:
+  enabled: true
+  max_rounds: 8

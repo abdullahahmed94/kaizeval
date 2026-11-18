@@ -5,7 +5,7 @@ checked by hand, and what is not done. Run the evidence yourself:
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 85 tests; strict offline; fails on any non-loopback connection
+pytest                 # 99 tests; strict offline; fails on any non-loopback connection
 kaizeval demo          # the whole journey on the bundled sample agent
 ```
 
@@ -38,6 +38,7 @@ That needs a real model that you configure.
 | 9 | Loop respects rounds, budgets, critical failures, stagnation, cancellation, approval before promotion | Done | `test_rounds_and_budgets_bound_the_loop`, `test_human_guided_flow_pauses_for_each_change`, `test_run_can_be_cancelled_midway`, `test_promotion_needs_explicit_approval_and_can_be_rolled_back` |
 | 10 | Reports: per-category scores, percentage-point deltas, evidence, latency, model usage and separate agent cost | Done | `test_report_shows_deltas_usage_and_caveats`, `test_single_evaluation_with_evidence_and_separate_costs` |
 | 11 | Workspace isolation, secret redaction, offline no-egress | Done at application level | `test_workspaces_are_isolated`, `test_credentials_are_never_returned`, `tests/test_security_and_network.py`, the socket guard in `tests/conftest.py`. The network-layer variant (`docker-compose.offline.yml`) was not run |
+| + | One file and one command (`kaizeval init`, `kaizeval run`), a chosen number of testers and reviewers, and MCP tools for coding assistants | Done | `tests/test_project.py` (including a run in a fresh process with its own embedded engine), `test_panel_of_reviewers_and_parallel_testers`, `test_several_independent_testers_write_the_tests` |
 | 12 | A fresh checkout completes an end-to-end demo without a paid key, with labelled synthetic results | Done for the pip path | `tests/test_cli.py` drives the same journey as `kaizeval demo` over HTTP. The Docker path is checked by the CI workflow only |
 
 ## Verified by hand, not by automated tests
