@@ -322,33 +322,6 @@ Recommendations, Optimization, Candidates, Audit, Workspace settings.
 - **Docker Compose:** API, workers and PostgreSQL; optional MinIO; a network-isolated variant for
   air-gapped sites. See [docs/INSTALL.md](docs/INSTALL.md).
 
-## Limitations
-
-Kaizeval is **alpha** software. Please read these before relying on it.
-
-- A score on generated tests describes behaviour on those tests. It is not real-world accuracy.
-- Reaching the target score is a goal, not a guarantee. The improvement loop stops when three cycles in a row change nothing, which can be below the target; you can then continue it or release what it reached.
-- Model judges are estimates and can be wrong or biased. Two judges agreeing is not proof.
-- Automatic optimization works only for agents that implement the candidate protocol (a few lines
-  with `kaizeval.agentkit`). No vendor-specific connector is included; other agents are evaluated as
-  black boxes and get recommendations.
-- It has been run end to end against one real local model (`qwen2.5:7b` on Ollama), including a
-  model-backed agent improved through its system prompt, and against one hosted provider with an
-  API key; what happened, what broke and what was fixed is in
-  [docs/REAL_MODEL_VALIDATION.md](docs/REAL_MODEL_VALIDATION.md). Other models and other
-  providers may behave differently. CI runs the test-suite on SQLite and on PostgreSQL and health-checks
-  the Docker Compose stack on every push. The S3 backend is tested against a local S3 emulator,
-  not against a real object store.
-- Model reviewers make mistakes. One claimed a refusal that was not there; such claims are now
-  verified against the answer, but treat reviewer scores as estimates, and review language
-  variants yourself.
-- An agent that is itself a model answers differently each time. Use `evaluation.repeats` and do
-  not read small differences as real.
-- Sign-in is local accounts only (no single sign-on yet). Holdout isolation is enforced in code,
-  not by a process boundary. No independent security audit has been done.
-- Evaluation sends real requests to your agent. Use a test deployment if its tools have side
-  effects.
-
 ## Documentation
 
 | | |

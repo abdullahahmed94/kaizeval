@@ -116,4 +116,4 @@ First public, self-hosted release.
 - Docker Compose deployment files, including a network-isolated variant.
 
 ### Known limitations
-See the "Limitations" section of the README and `docs/MVP_ACCEPTANCE.md`.
+See `docs/MVP_ACCEPTANCE.md`.
