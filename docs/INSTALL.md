@@ -53,8 +53,9 @@ Open `http://127.0.0.1:8000`. Add `--profile demo` to also start the sample agen
 The API container applies database migrations on start; workers wait for it. Scale workers with
 `docker compose … up -d --scale worker=3`.
 
-> The Compose files are exercised by the project's CI workflow. They were not run on the machine
-> that prepared release 0.1.0, which had no Docker installation.
+> The CI workflow builds this image and starts this stack (API, worker, PostgreSQL and the sample
+> agent) on every push, then checks health, the API and the console. The functional test-suite
+> itself runs on SQLite.
 
 ### Network-isolated deployment
 

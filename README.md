@@ -306,9 +306,10 @@ Kaizeval is **alpha** software. Please read these before relying on it.
 - Model judges are estimates and can be wrong or biased. Two judges agreeing is not proof.
 - Automatic optimization works only for agents that implement the candidate protocol. No
   vendor-specific connector is included; arbitrary platforms are evaluated as black boxes.
-- Release 0.1.0 was not run against a real model server or under Docker on the machine that
-  prepared it. The OpenAI-compatible path is tested against a local mock server; the Compose
-  stack is exercised by CI. Details: [docs/MVP_ACCEPTANCE.md](docs/MVP_ACCEPTANCE.md).
+- Release 0.1.0 has not been run against a real model server: the OpenAI-compatible path is tested
+  against a local mock server. CI builds and health-checks the Docker Compose stack with
+  PostgreSQL on every push, while the functional tests run on SQLite.
+  Details: [docs/MVP_ACCEPTANCE.md](docs/MVP_ACCEPTANCE.md).
 - Sign-in is local accounts only (no single sign-on yet). Holdout isolation is enforced in code,
   not by a process boundary. No independent security audit has been done.
 - Evaluation sends real requests to your agent. Use a test deployment if its tools have side

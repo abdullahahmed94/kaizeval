@@ -64,13 +64,14 @@ inconsistencies, resolved as follows:
 
 ## Open items
 
-Unverified on the release machine (no Docker, no model server): the Compose stack with
-PostgreSQL, the S3 storage backend, the network-isolated override, and any real model.
+Verified by CI: the test-suite on three Python versions, the console build, the wheel with the
+demo journey, and the Docker Compose stack starting on PostgreSQL. Still unverified: the full
+journey on PostgreSQL, the S3 storage backend, the network-isolated override, and any real model.
 Not implemented: see the list at the end of [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md).
 
 ## Next milestones
 
-1. **Validate what is unverified**: green CI including the Compose job; a PostgreSQL run of the
+1. **Validate what is unverified**: a PostgreSQL run of the
    full test-suite; S3 storage tests; a documented run against a real local model.
 2. **Trust in scores**: judge calibration against a human-labelled sample; knowledge-base health
    report (contradictions, duplicates, ambiguous passages).

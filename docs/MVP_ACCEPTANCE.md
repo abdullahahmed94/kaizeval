@@ -39,7 +39,7 @@ That needs a real model that you configure.
 | 10 | Reports: per-category scores, percentage-point deltas, evidence, latency, model usage and separate agent cost | Done | `test_report_shows_deltas_usage_and_caveats`, `test_single_evaluation_with_evidence_and_separate_costs` |
 | 11 | Workspace isolation, secret redaction, offline no-egress | Done at application level | `test_workspaces_are_isolated`, `test_credentials_are_never_returned`, `tests/test_security_and_network.py`, the socket guard in `tests/conftest.py`. The network-layer variant (`docker-compose.offline.yml`) was not run |
 | + | One file and one command (`kaizeval init`, `kaizeval run`), a chosen number of testers and reviewers, and MCP tools for coding assistants | Done | `tests/test_project.py` (including a run in a fresh process with its own embedded engine), `test_panel_of_reviewers_and_parallel_testers`, `test_several_independent_testers_write_the_tests` |
-| 12 | A fresh checkout completes an end-to-end demo without a paid key, with labelled synthetic results | Done for the pip path | `tests/test_cli.py` drives the same journey as `kaizeval demo` over HTTP. The Docker path is checked by the CI workflow only |
+| 12 | A fresh checkout completes an end-to-end demo without a paid key, with labelled synthetic results | Done | `tests/test_cli.py` drives the same journey as `kaizeval demo` over HTTP. CI also runs `kaizeval demo` from the built wheel and starts the Docker Compose stack |
 
 ## Verified by hand, not by automated tests
 
@@ -55,19 +55,28 @@ That needs a real model that you configure.
   candidate.
 - There is no automated browser test and no accessibility audit.
 
-## Not verified on the release machine
+## What continuous integration verifies, and what is still unverified
 
-The machine used to prepare this release had no Docker and no local model server. Therefore:
+Every push runs the CI workflow (`.github/workflows/ci.yml`) on GitHub-hosted runners:
 
-- **Docker Compose, PostgreSQL and separate worker containers** were not started locally. The CI
-  workflow builds the image, starts the stack and checks health. PostgreSQL is reached only
-  through SQLAlchemy and Alembic with no dialect-specific SQL, but until CI is green on a
-  published repository this path is unproven.
+- the full test-suite on Python 3.10, 3.11 and 3.12 (SQLite);
+- the web console build;
+- a wheel build, then `kaizeval demo` end to end from the installed wheel;
+- **Docker Compose with PostgreSQL**: the image is built, the stack is started with the API, a
+  worker, PostgreSQL and the sample agent, the migrations are applied to PostgreSQL, and the
+  health check, the API and the console are requested.
+
+Still unverified:
+
+- **The full journey on PostgreSQL.** CI proves that the stack starts and the schema migrates on
+  PostgreSQL; the functional test-suite itself runs on SQLite. All database access goes through
+  SQLAlchemy with no dialect-specific SQL.
 - **S3 / MinIO storage** is implemented (`storage.S3Storage`) and has no test.
 - **The network-isolated Compose override** is provided and unvalidated.
-- **A real local model** (Ollama, vLLM) was never called. Preflight, routing, retries, JSON
-  validation and metering are covered against a mock server that speaks the same protocol; the
-  usefulness of any particular model as a judge or generator is not established by this project.
+- **A real model** (for example a local Ollama or vLLM server) was never called. Preflight,
+  routing, retries, JSON validation and metering are covered against a mock server that speaks
+  the same protocol; the usefulness of any particular model as a tester, reviewer or optimizer is
+  not established by this project.
 
 ## Deliberate differences from the original blueprint
 
