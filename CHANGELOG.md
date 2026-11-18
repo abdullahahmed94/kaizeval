@@ -18,7 +18,14 @@ All notable changes to this project are documented here. The format follows
   OpenAI-compatible model and records validity, retries, latency and sanity checks.
 - A `Publish to PyPI` workflow using Trusted Publishing.
 - Reports and `kaizeval run` now end with the recommendations for what still fails in the best
-  version, and `kaizeval run` reports `stalled` when two runs in a row score the same.
+  version, and `kaizeval run` reports `stalled` when three runs in a row leave the score unchanged.
+- Continue or release after a stop. When the loop has stopped, the owner reviews the report and
+  chooses: `kaizeval run --continue` (API: `POST /optimization-runs/{id}/continue`, console:
+  "Continue improving", MCP: `continue_improvement`) keeps improving from the candidate, or
+  `kaizeval release approve` releases it as it is. A continuation measures baseline and candidate
+  again, rebuilds the candidate if the agent was changed or restarted, and voids any release
+  approval given before it.
+- Results carry `decision_options`, and reports a "Your decision" section.
 
 - `evaluation.repeats` in the project file, and a warning with the measured variation when the
   same baseline scores differently in two runs.
@@ -27,8 +34,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - The improvement loop has no fixed number of rounds any more. It runs until the target is
-  reached or until two cycles in a row leave the score unchanged (`stagnation_rounds: 2`).
+  reached or until three cycles in a row leave the score unchanged (`stagnation_rounds: 3`).
   `max_rounds` is now an optional extra limit.
+- On a terminal, `kaizeval run` now asks "continue, release, reject or decide later" instead of a
+  yes/no release question; pressing Enter records no decision (it used to reject).
 - A proposed change that was already tried and not kept is not evaluated again; it counts as an
   unchanged cycle.
 - The interactive `/api/docs` page was removed because it loaded scripts from a public CDN; the
@@ -46,6 +55,11 @@ All notable changes to this project are documented here. The format follows
 - A source named inside the answer text counts as a citation.
 - Key facts no longer decide correctness for questions asked in another language.
 - Preflight and call timeouts allow for a local model that needs minutes to load.
+- Rotating the holdout failed with a real model, which repeated the questions the dataset already
+  had. The tester is now told what each passage was already asked, passages with the fewest
+  questions are preferred, near-repeats of existing questions are dropped, and generation is
+  retried on other passages. If a fresh holdout still cannot be generated, `kaizeval run`
+  continues without the final holdout check and says so, instead of failing.
 
 ### Fixed
 - The fake optimizer no longer proposes again a change that a reviewer rejected.

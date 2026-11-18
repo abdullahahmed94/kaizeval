@@ -133,7 +133,7 @@ that every fake-provider result carries.
 
 | Journey overview | Optimization run | Paired A/B comparison |
 |---|---|---|
-| ![Overview page with the journey checklist](docs/images/console-overview.jpg) | ![Optimization run with the round-by-round timeline](docs/images/console-optimization.jpg) | ![Paired A/B comparison with confidence interval and verdict](docs/images/console-ab-comparison.jpg) |
+| ![Overview page with the journey checklist](docs/images/console-overview.jpg) | ![Optimization run: result, the continue-or-release decision and the timeline](docs/images/console-optimization.jpg) | ![Paired A/B comparison with confidence interval and verdict](docs/images/console-ab-comparison.jpg) |
 
 ## Test your own agent in three commands
 
@@ -167,20 +167,33 @@ score, the failed cases, the recommendations and a report. Run it again after ch
 and it compares the new run with the first one, case by case:
 
 ```text
-[5/7] tests ready: 30 regression, 12 sealed holdout (3 tester(s))
-[6/7] evaluated with 3 reviewer(s): overall 40.0%, pass rate 13.3%, critical failures 3
-[7/7] optimization completed (the optimizer found no further safe change): best 82.3% after 5 round(s)
-    A/B on regression: +43.09 pp -> improved
+[5/7] tests ready: 24 regression, 12 sealed holdout (3 tester(s))
+[6/7] evaluated with 3 reviewer(s): overall 39.8%, pass rate 8.3%, critical failures 3
+[7/7] optimization completed (the optimizer found no further safe change): best 85.9% after 5 round(s)
+    A/B on regression: +45.86 pp -> improved
     sealed holdout:    +26.38 pp -> inconclusive
-  next: Candidate B is waiting for your decision. Nothing was changed in production.
-        Run `kaizeval release approve` to promote it, or `kaizeval release reject`.
+  next: The loop stopped (the optimizer found no further safe change). Candidate B is waiting
+        for your decision; nothing was changed in production. Review the report and apply the
+        recommendations you agree with, then choose: `kaizeval run --continue` to keep
+        improving from Candidate B, `kaizeval release approve` to release it as it is, or
+        `kaizeval release reject`.
   result: target not met
 ```
 
 (That output is from `examples/kaizeval.yaml` with the built-in fake model, so it is SYNTHETIC.)
-The loop keeps going until your target is reached, or until two cycles in a row leave the score
+The loop keeps going until your target is reached, or until three cycles in a row leave the score
 unchanged; then it exits with the recommendations for what still fails and a report. 100% is the
-goal, not a promise. The release decision is always yours.
+goal, not a promise.
+
+**Then it is your call.** Read the report, apply the recommendations you agree with, and choose:
+
+```bash
+kaizeval run --continue     # keep improving from the improved version, not from scratch
+kaizeval release approve    # release the improved version as it is
+kaizeval release reject     # keep what you had
+```
+
+Nothing is released, and the loop is never restarted, without that decision.
 
 A plain HTTP agent can be tested and scored but not changed from outside, so for such an agent you
 (or your coding assistant) apply the recommendations and run again. To let Kaizeval close the loop
@@ -192,7 +205,8 @@ Full reference: [docs/PROJECT_MODE.md](docs/PROJECT_MODE.md).
 
 Any assistant that can run a terminal command can drive the loop: it runs
 `kaizeval run --json --no-input`, reads `failures` and `recommendations`, edits your agent, and
-runs again until `target_met` is true. For assistants that speak the Model Context Protocol there
+runs again until `target_met` is true or the loop stops (`stalled`, or `decision_options` is not
+empty). At that point it asks you whether to continue or to release. For assistants that speak the Model Context Protocol there
 is a built-in server:
 
 ```bash
@@ -290,7 +304,7 @@ Action:
 | Tests | Written by 1 to 8 independent tester agents, each with its own angle; knowledge, citation, edge-case, multi-turn and unanswerable cases; language variants (needs a real model); import of approved Q&A; coverage report; stale-case detection when a document changes |
 | Evaluation | Deterministic-first scoring; 1 to 7 independent reviewer agents with an arbiter on disagreement; testers run in parallel; critical-failure gates; "needs human review" and "not scored" as first-class outcomes |
 | Diagnosis | Findings that separate observation from hypothesis; prioritised recommendations with a review workflow |
-| Optimization | Human-guided or autonomous; allowlisted patches on an isolated candidate; full regression each round; rollback; budgets, stagnation and cancellation |
+| Optimization | Human-guided or autonomous; allowlisted patches on an isolated candidate; full regression each round; rollback; budgets, stagnation and cancellation; continue from the candidate after a stop |
 | Validation | Paired A/B with bootstrap confidence interval; sealed, rotatable holdout; explicit approval, promotion and rollback |
 | Operations | One-file project mode (`kaizeval init` / `run`); MCP server for coding assistants; roles (owner, editor, reviewer, viewer); audit trail; encrypted credentials; JSON and Markdown reports; REST API; CLI; GitHub Action |
 
@@ -308,7 +322,7 @@ Recommendations, Optimization, Candidates, Audit, Workspace settings.
 Kaizeval is **alpha** software. Please read these before relying on it.
 
 - A score on generated tests describes behaviour on those tests. It is not real-world accuracy.
-- Reaching the target score is a goal, not a guarantee. The improvement loop stops when two cycles in a row change nothing, which can be below the target.
+- Reaching the target score is a goal, not a guarantee. The improvement loop stops when three cycles in a row change nothing, which can be below the target; you can then continue it or release what it reached.
 - Model judges are estimates and can be wrong or biased. Two judges agreeing is not proof.
 - Automatic optimization works only for agents that implement the candidate protocol (a few lines
   with `kaizeval.agentkit`). No vendor-specific connector is included; other agents are evaluated as

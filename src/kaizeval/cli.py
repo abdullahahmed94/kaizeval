@@ -101,6 +101,9 @@ def run_demo_flow(api: Api, *, agent_url: str, admin_token: str, email: str, pas
         f"{overall.get('delta_percentage_points', 0):+.2f} pp [{overall.get('verdict', 'n/a')}], holdout "
         f"{(holdout.get('overall') or {}).get('delta_percentage_points', 0):+.2f} pp "
         f"[{(holdout.get('overall') or {}).get('verdict', holdout.get('status'))}]")
+    if report.get("next_decision"):
+        log("    Your decision: open the optimization run in the console and choose \"Continue improving\", "
+            "or review Candidate B and release it. Nothing was changed in production.")
     return {"workspace_id": ws, "agent_id": agent["id"], "dataset_id": dataset["id"],
             "baseline_run_id": started["run"]["id"], "optimization_run_id": opt["optimization_run"]["id"], "report": report}
 
@@ -229,23 +232,40 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     quiet = args.json
     log = (lambda message: print(message, file=sys.stderr)) if quiet else print
-    try:
-        result = run_project(Path(args.config), url=args.url, holdout=args.holdout, regenerate=args.regenerate,
-                             reset_baseline=args.reset_baseline, log=log)
-    except ProjectError as exc:
-        print(f"kaizeval run: {exc}", file=sys.stderr)
-        return EXIT_ERROR
-    print(json.dumps(result, indent=2) if quiet else format_result(result))
-    candidate = ((result.get("optimization") or {}).get("candidate") or {})
-    if candidate.get("status") == "awaiting_decision" and not quiet and not args.no_input and sys.stdin.isatty():
-        # The release decision always belongs to a person.
-        answer = input("\nPromote Candidate B to production? [y/N] ").strip().lower()
+    resume, regenerate, reset_baseline = args.resume, args.regenerate, args.reset_baseline
+    while True:
         try:
-            outcome = release(Path(args.config), "approve" if answer in ("y", "yes") else "reject", url=args.url, log=log)
+            result = run_project(Path(args.config), url=args.url, holdout=args.holdout, regenerate=regenerate,
+                                 reset_baseline=reset_baseline, continue_=resume, log=log)
         except ProjectError as exc:
-            print(f"kaizeval release: {exc}", file=sys.stderr)
+            print(f"kaizeval run: {exc}", file=sys.stderr)
             return EXIT_ERROR
-        print(f"decision recorded: {outcome['decision']} (candidate is now {outcome['candidate_status']})")
+        print(json.dumps(result, indent=2) if quiet else format_result(result))
+        options = result.get("decision_options") or []
+        if not options or result["target_met"] and "release" not in options:
+            break
+        if quiet or args.no_input or not sys.stdin.isatty():
+            break
+        # Whether to go on or to release always belongs to a person.
+        choices = ["[c] continue improving (after you applied the recommendations)"]
+        if "release" in options:
+            choices += ["[r] release Candidate B as it is", "[x] reject Candidate B"]
+        answer = input("\nWhat next?\n  " + "\n  ".join(choices) + "\n  [Enter] decide later\n> ").strip().lower()
+        if answer in ("c", "continue"):
+            resume, regenerate, reset_baseline = True, False, False
+            continue
+        decision = {"r": "approve", "release": "approve", "x": "reject", "reject": "reject"}.get(answer)
+        if decision and "release" in options:
+            try:
+                outcome = release(Path(args.config), decision, url=args.url, log=log)
+            except ProjectError as exc:
+                print(f"kaizeval release: {exc}", file=sys.stderr)
+                return EXIT_ERROR
+            print(f"decision recorded: {outcome['decision']} (candidate is now {outcome['candidate_status']})")
+        else:
+            print("No decision recorded. Later: `kaizeval run --continue`"
+                  + (", `kaizeval release approve` or `kaizeval release reject`." if "release" in options else "."))
+        break
     return EXIT_OK if result["target_met"] else EXIT_QUALITY_GATE
 
 
@@ -332,6 +352,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--holdout", action="store_true", help="also run the final check on the sealed holdout")
     p.add_argument("--regenerate", action="store_true", help="generate a new test set (resets the baseline)")
     p.add_argument("--reset-baseline", action="store_true", help="make this run the new baseline for comparisons")
+    p.add_argument("--continue", dest="resume", action="store_true",
+                   help="keep improving from where the loop stopped instead of starting again from the baseline")
     p.add_argument("--json", action="store_true", help="print the result as JSON (progress goes to stderr)")
     p.add_argument("--no-input", action="store_true", help="never ask a question on the terminal")
     p.set_defaults(fn=cmd_run)

@@ -1,4 +1,4 @@
-"""The loop keeps going until the target is reached or two cycles in a row leave the score unchanged."""
+"""The loop keeps going until the target is reached or three cycles in a row leave the score unchanged."""
 
 from __future__ import annotations
 
@@ -18,10 +18,10 @@ def _workspace(client, sample_agent, n_cases=24):
 
 
 def test_default_policy_has_no_fixed_number_of_rounds():
-    assert DEFAULT_POLICY["max_rounds"] is None and DEFAULT_POLICY["stagnation_rounds"] == 2
+    assert DEFAULT_POLICY["max_rounds"] is None and DEFAULT_POLICY["stagnation_rounds"] == 3
 
 
-def test_loop_runs_until_two_cycles_leave_the_score_unchanged(client, sample_agent):
+def test_loop_runs_until_three_cycles_leave_the_score_unchanged(client, sample_agent):
     s, agent_id, dataset_id = _workspace(client, sample_agent)
     started = s.post("/ws/optimization-runs", json={"agent_id": agent_id, "dataset_id": dataset_id, "mode": "autonomous",
                                                     "policy": {"run_holdout": False}})
@@ -29,13 +29,13 @@ def test_loop_runs_until_two_cycles_leave_the_score_unchanged(client, sample_age
     assert run["status"] == "completed" and run["policy"]["max_rounds"] is None
     history = run["state"]["history"]
     # No round limit ended it. It kept going while cycles improved the score and stopped only when
-    # two cycles in a row changed nothing, or when the optimizer had no change left to propose.
-    assert run["stop_reason"] in ("the score did not change in 2 consecutive cycles",
+    # three cycles in a row changed nothing, or when the optimizer had no change left to propose.
+    assert run["stop_reason"] in ("the score did not change in 3 consecutive cycles",
                                   "the optimizer found no further safe change")
     if run["stop_reason"].startswith("the score did not change"):
-        assert all(h["outcome"] != "kept" for h in history[-2:])
+        assert all(h["outcome"] != "kept" for h in history[-3:])
     else:
-        assert run["state"]["stagnation"] < 2
+        assert run["state"]["stagnation"] < 3
     assert sum(1 for h in history if h["outcome"] == "kept") >= 2
     assert all(later["overall"] >= earlier["overall"] for earlier, later in zip(
         [h for h in history if h["outcome"] == "kept"], [h for h in history if h["outcome"] == "kept"][1:], strict=False))
@@ -70,8 +70,8 @@ def test_repeating_a_failed_change_counts_as_an_unchanged_cycle(client, sample_a
     finally:
         gateway_core.fake_complete = original
     run = s.get(f"/ws/optimization-runs/{started['optimization_run']['id']}")
-    assert run["stop_reason"] == "the score did not change in 2 consecutive cycles"
-    assert [h["outcome"] for h in run["state"]["history"]] == ["rolled_back", "repeated"]
+    assert run["stop_reason"] == "the score did not change in 3 consecutive cycles"
+    assert [h["outcome"] for h in run["state"]["history"]] == ["rolled_back", "repeated", "repeated"]
     candidate_runs = [r for r in s.get("/ws/evaluation-runs", params={"limit": 50})["items"]
                       if r["optimization_run_id"] == run["id"] and r["kind"] == "candidate"]
     assert len(candidate_runs) == 1  # the repeated change was not evaluated again

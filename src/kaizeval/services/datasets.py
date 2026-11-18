@@ -106,7 +106,13 @@ def _split(cases: list[dict[str, Any]], fraction: float, seed: int) -> None:
 def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: int, categories: list[str],
                  include_multi_turn: bool, unanswerable_share: float, languages: list[str],
                  document_ids: list[str] | None, seed: int, variation: int, existing_questions: set[str],
-                 notes: list[str], testers: int = 1, keep_unverified: bool = False) -> tuple[list[dict[str, Any]], bool]:
+                 notes: list[str], testers: int = 1, keep_unverified: bool = False,
+                 asked: dict[str, list[str]] | None = None) -> tuple[list[dict[str, Any]], bool]:
+    """Draft test cases from the knowledge base.
+
+    ``asked`` maps a passage id to the questions the dataset already holds about it. When given
+    (a fresh holdout for a dataset that exists), passages with the fewest questions are preferred
+    and the tester is told what was already asked, so the new questions are really new."""
     provider = DocumentGroundTruthProvider(db, workspace_id)
     chunks = [(c, d) for c, d in current_kb_chunks(db, workspace_id, document_ids) if len(c.text) >= 60]
     if not chunks:
@@ -120,7 +126,10 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
     per_chunk = max(1, min(3, math.ceil(n_answerable / len(chunks))))
     rng = random.Random(seed)
     wanted_chunks = min(len(chunks), math.ceil(n_answerable / per_chunk))
-    if wanted_chunks < len(chunks):
+    if asked is not None:
+        order = {c.id: rng.random() for c, _ in chunks}
+        selected = sorted(chunks, key=lambda pair: (len(asked.get(pair[0].id, [])), order[pair[0].id]))[:wanted_chunks]
+    elif wanted_chunks < len(chunks):
         step = len(chunks) / wanted_chunks
         offset = rng.random() * step
         selected = [chunks[int(offset + i * step) % len(chunks)] for i in range(wanted_chunks)]
@@ -139,7 +148,8 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
         for start in range(0, len(share), 4):
             batch = share[start:start + 4]
             out, meta = gateway.generate("generate.questions", {
-                "chunks": [{"ref": f"chunk:{c.id}", "section": c.section, "document": d.filename, "text": c.text} for c, d in batch],
+                "chunks": [{"ref": f"chunk:{c.id}", "section": c.section, "document": d.filename, "text": c.text,
+                            **({"already_asked": asked[c.id][:8]} if asked and asked.get(c.id) else {})} for c, d in batch],
                 "per_chunk": per_chunk, "categories": answerable_categories, "include_multi_turn": include_multi_turn,
                 "variation": variation + tester, "persona": persona,
             })
@@ -156,7 +166,8 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
                 if (not is_multi_turn and len(plain) >= per_chunk) or (is_multi_turn and any(x.get("follow_up") for x in same_chunk)):
                     dropped += 1
                     continue
-                if not meta.synthetic and any(similarity(q.question, x["question"]) >= 0.75 for x in same_chunk):
+                earlier = [x["question"] for x in same_chunk] + list((asked or {}).get(by_ref[q.chunk_ref][0].id, []))
+                if not meta.synthetic and any(similarity(q.question, text) >= 0.75 for text in earlier):
                     dropped += 1
                     continue
                 existing_questions.add(key)
@@ -344,14 +355,35 @@ def rotate_holdout(db: Session, dataset: Dataset, params: dict[str, Any], user_i
     gateway = Gateway(db, dataset.workspace_id, run_id=dataset.id, limits=params.get("limits"))
     notes = list(dataset.notes or [])
     target = int(params.get("n_cases") or max(4, len(current)))
-    fresh, synthetic = _draft_cases(
-        db, gateway, workspace_id=dataset.workspace_id, n_cases=target, categories=ANSWERABLE_CATEGORIES,
-        include_multi_turn=False, unanswerable_share=0.2, languages=[], document_ids=None,
-        seed=dataset.seed + dataset.holdout_generation, variation=dataset.holdout_generation,
-        existing_questions=existing, notes=notes)
+    # What each passage was already asked, so the fresh holdout does not repeat the regression set.
+    asked: dict[str, list[str]] = {}
+    for row in db.scalars(select(TestCase).where(TestCase.dataset_id == dataset.id)):
+        for ref in row.evidence_refs or []:
+            if ref.get("chunk_id") and row.turns:
+                asked.setdefault(ref["chunk_id"], []).append(row.turns[0]["content"])
+    fresh: list[dict[str, Any]] = []
+    synthetic = False
+    # A model may repeat what exists or write questions that cannot be verified. Try again on other
+    # passages before giving up.
+    for attempt in range(3):
+        more, used_fake = _draft_cases(
+            db, gateway, workspace_id=dataset.workspace_id, n_cases=max(2, target - len(fresh)),
+            categories=ANSWERABLE_CATEGORIES, include_multi_turn=False,
+            unanswerable_share=0.0 if any(c["category"] == "unanswerable" for c in fresh) else 0.2,
+            languages=[], document_ids=None, seed=dataset.seed + dataset.holdout_generation + attempt * 101,
+            variation=dataset.holdout_generation + attempt, existing_questions=existing, notes=notes, asked=asked)
+        synthetic = synthetic or used_fake
+        for item in more:
+            item["key"] = f"r{attempt}:{item['key']}"
+            for ref in item.get("evidence_refs") or []:
+                asked.setdefault(ref["chunk_id"], []).append(item["turns"][0]["content"])
+        fresh.extend(more)
+        if len(fresh) >= target:
+            break
+    fresh = fresh[:max(target, 2)]
     if len(fresh) < 2:
-        raise DatasetError("the generator produced no new questions for a fresh holdout; "
-                           "use a real model or import additional approved cases")
+        raise DatasetError("the generator produced no new questions for a fresh holdout after three attempts; "
+                           "add knowledge documents, use another model, or import additional approved cases")
     for case in current:
         case.split = "regression"
         case.provenance = {**(case.provenance or {}), "retired_from_holdout_generation": case.holdout_generation}

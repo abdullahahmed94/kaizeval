@@ -12,7 +12,7 @@ import {
 } from "../components/ui";
 import { formatPercent, formatPp, humanize } from "../format";
 import { useAction, useLoad, useNames } from "../hooks";
-import type { HoldoutResult, Job, OptimizationRun, Patch } from "../types";
+import type { HoldoutResult, Job, NextDecision, OptimizationRun, Patch } from "../types";
 
 const OUTCOME_LABELS: Record<string, string> = {
   kept: "Kept", rolled_back: "Rolled back", rejected: "Rejected by reviewer", invalid: "Invalid proposal",
@@ -173,6 +173,65 @@ function PendingChange({ patch, onDecided }: { patch: Patch; onDecided: () => vo
   );
 }
 
+/** Shown once the loop has stopped: the owner reviews, then continues the loop or releases the candidate. */
+function DecisionPanel({ run, decision, onContinued }: { run: OptimizationRun; decision: NextDecision; onContinued: () => void }) {
+  const { api, can } = useSession();
+  const action = useAction();
+  const [confirm, setConfirm] = useState(false);
+  const [withoutHoldout, setWithoutHoldout] = useState(false);
+  const allowed = can(run.mode === "autonomous" ? "owner" : "editor");
+  const holdoutSpent = (action.error as { code?: string } | null)?.code === "HOLDOUT_SPENT";
+
+  return (
+    <section className="card pending" aria-labelledby="decision-title">
+      <h2 id="decision-title">Your decision</h2>
+      <p>
+        The loop stopped: <strong>{run.stop_reason ?? "no reason recorded"}</strong>. {decision.note}
+      </p>
+      <div className="button-row">
+        {allowed && (
+          <button type="button" className="btn btn-primary" disabled={action.busy} onClick={() => setConfirm(true)}>
+            Continue improving
+          </button>
+        )}
+        {decision.options.includes("release") && run.candidate_id && (
+          <Link className="btn" to={`/candidates/${run.candidate_id}`}>Release or reject Candidate B</Link>
+        )}
+      </div>
+      {!allowed && <p className="muted small">Continuing this run needs the {run.mode === "autonomous" ? "owner" : "editor"} role.</p>}
+      {holdoutSpent && (
+        <Notice tone="warn" title="The sealed holdout was already used">
+          <p>
+            It informed the previous stop, so it cannot confirm further tuning. Rotate it on the{" "}
+            <Link to={`/datasets/${run.dataset_id}`}>dataset page</Link> and continue, or continue without the final holdout check.
+          </p>
+          <label className="check">
+            <input type="checkbox" checked={withoutHoldout} onChange={(event) => setWithoutHoldout(event.target.checked)} />
+            {" "}Continue without the final holdout check
+          </label>
+        </Notice>
+      )}
+      {!holdoutSpent && <ErrorNote error={action.error} />}
+      <ConfirmDialog open={confirm} title="Continue improving from this candidate?" confirmLabel="Continue" busy={action.busy}
+        onCancel={() => setConfirm(false)}
+        onConfirm={() => void action.run(async () => {
+          try {
+            await api.continueOptimization(run.id, withoutHoldout ? { run_holdout: false } : {});
+            onContinued();
+          } finally {
+            setConfirm(false);
+          }
+        })}>
+        <p>
+          The baseline and the candidate are measured again first, because the agent may have changed since the stop. The loop
+          then goes on until the target is reached or {run.policy.stagnation_rounds} cycles in a row leave the score unchanged.
+          An approval given before continuing no longer applies. Production is not touched.
+        </p>
+      </ConfirmDialog>
+    </section>
+  );
+}
+
 function HoldoutPanel({ holdout, finished }: { holdout: HoldoutResult | null; finished: boolean }) {
   return (
     <Card title="Independent holdout validation">
@@ -329,6 +388,26 @@ export function OptimizationDetailPage() {
             )}
           </Card>
 
+          {report.data?.next_decision && !stoppable && (
+            <DecisionPanel run={data} decision={report.data.next_decision} onContinued={reloadAndWatch} />
+          )}
+          {(data.state.continuations ?? []).length > 0 && (
+            <Card title="Continuations">
+              <ul>
+                {(data.state.continuations ?? []).map((item, index) => (
+                  <li key={index}>
+                    Continued after round {item.after_round} by {userLabel(item.by)} (<When value={item.at} />). The loop had
+                    stopped: {item.previous_stop_reason ?? "no reason recorded"}, best {formatPercent(item.previous_best_overall)}.
+                    {item.baseline_overall !== undefined && (
+                      <> Measured again: baseline {formatPercent(item.baseline_overall)}, candidate {formatPercent(item.best_overall)}.</>
+                    )}
+                    {item.baseline_changed_by_owner && " The baseline had been changed by its owner."}
+                    {item.test_set_changed && ` The regression set had grown to ${item.regression_cases ?? "more"} cases, so these scores are not comparable with the earlier ones.`}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
           {pending && <PendingChange key={pending.id} patch={pending} onDecided={reloadAndWatch} />}
           {data.status === "review_required" && !pending && (
             isActive(data.job?.status)
@@ -386,7 +465,8 @@ export function OptimizationDetailPage() {
             {data.status === "completed" && data.candidate_id && (
               <p>
                 <Badge tone="info">Next step</Badge>{" "}
-                <Link to={`/candidates/${data.candidate_id}`}>Review Candidate B and record a release decision</Link>
+                <Link to={`/candidates/${data.candidate_id}`}>Review Candidate B and record a release decision</Link>, or
+                continue improving with the button at the top of this page.
               </p>
             )}
           </Card>

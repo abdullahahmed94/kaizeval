@@ -360,6 +360,8 @@ export function workspaceApi(ws: string) {
       request<Page<OptimizationRun>>("GET", `${w}/optimization-runs`, { query }),
     optimization: (id: string) => request<OptimizationRun>("GET", `${w}/optimization-runs/${id}`),
     stopOptimization: (id: string) => request<OptimizationRun>("POST", `${w}/optimization-runs/${id}/stop`),
+    continueOptimization: (id: string, policy: Record<string, unknown> = {}) =>
+      request<StartOptimizationResult>("POST", `${w}/optimization-runs/${id}/continue`, { body: { policy } }),
     decidePatch: (patchId: string, decision: "approved" | "rejected", note: string | null) =>
       request<{ patch: Patch; optimization_run: OptimizationRun | null }>(
         "POST", `${w}/candidate-patches/${patchId}/decision`, { body: { decision, note } }),

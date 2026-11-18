@@ -135,6 +135,10 @@ set, compare pairwise with the baseline, apply the gates, keep or restore →
 back to `propose` … → finalize → holdout validation (aggregates only) → candidate
 `awaiting_decision`. Promotion is a separate API call that needs a recorded approval.
 
+A stopped run can be continued by its owner: the state goes to `resume`, which re-creates or
+rebuilds the candidate if the agent changed, evaluates baseline and candidate again, voids any
+unused release approval, and returns to `propose` with a fresh stagnation count.
+
 ### Holdout isolation
 - `services/datasets.py` exposes `regression_cases()` and `holdout_cases(access)`.
 - A `HoldoutAccess` is created in exactly three places: `services/holdout.py` (final validation

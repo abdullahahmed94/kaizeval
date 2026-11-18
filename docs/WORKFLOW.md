@@ -29,10 +29,12 @@ flowchart TD
     S -->|No| N
     S -->|Yes| T["Independent holdout validation<br/>aggregate result only"]
     H -.->|"never shown to the optimizer"| T
-    T --> U["Final report"]
-    U --> V{"Owner approves<br/>the release?"}
-    V -->|Yes| W(["Promote Candidate B"])
-    V -->|No| X(["Keep Baseline A"])
+    T --> U["Report and recommendations<br/>for what still fails"]
+    U --> V{"Owner reviews, applies<br/>recommendations, then decides"}
+    V -->|Continue| Y["Measure A and B again<br/>on a fresh holdout"]
+    Y --> N
+    V -->|Release| W(["Promote Candidate B"])
+    V -->|Reject| X(["Keep Baseline A"])
 ```
 
 | Step | Who | What Kaizeval guarantees |
@@ -113,7 +115,9 @@ sequenceDiagram
 
 Gates: minimum improvement over the best version so far, no new critical failure, no category
 dropping more than the tolerance, optional per-category minimums and a latency limit. The loop stops when
-the target score is reached or when two cycles in a row leave the score unchanged; an optional round limit, model and agent budgets and cancellation can end it earlier. It always exits with the recommendations for what still fails.
+the target score is reached or when three cycles in a row leave the score unchanged; an optional round limit, model and agent budgets and cancellation can end it earlier. It always exits with the recommendations for what still fails.
+
+A stop hands the decision to the owner: continue from Candidate B (both versions are measured again first, because the agent may have been changed by hand), release it, or reject it. Nothing continues and nothing is released without that decision.
 
 ## 4. Roles and decisions
 

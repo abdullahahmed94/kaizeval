@@ -27,9 +27,14 @@ Typical loop:
    `evaluate_agent` again. `comparison_with_baseline` tells you whether the change really helped
    ("improved"), hurt ("regressed") or made no demonstrable difference ("inconclusive").
 4. Repeat until `target_met` is true, then call `evaluate_agent` once with final_holdout_check=true.
-   Stop as well when `stalled` is true (two runs in a row with the same score): report what still
-   fails to the user instead of trying further changes blindly.
-5. Never release on the user's behalf: ask the user, then call `release_candidate` with their decision.
+5. Stop when the loop stops: `stalled` is true (three runs in a row with the same score), or
+   `decision_options` is not empty (the automatic improvement loop ended after three cycles
+   without progress). Show the user the report and the remaining recommendations, and ask what
+   they want: continue, or release as it is. Do not decide for them.
+   - continue: apply the recommendations they agree with, then call `evaluate_agent` with
+     continue_improvement=true. The loop goes on from the improved candidate, not from scratch.
+   - release: call `release_candidate` with decision "approve" (or "reject").
+6. Never release on the user's behalf: ask the user, then call `release_candidate` with their decision.
 
 Results flagged `synthetic: true` come from the built-in fake model and are not real evaluations.
 """
@@ -68,13 +73,18 @@ def build_server() -> Any:
 
     @server.tool()
     def evaluate_agent(config_path: str = CONFIG_NAME, final_holdout_check: bool = False,
-                       regenerate_tests: bool = False, reset_baseline: bool = False) -> dict[str, Any]:
+                       regenerate_tests: bool = False, reset_baseline: bool = False,
+                       continue_improvement: bool = False) -> dict[str, Any]:
         """Run the journey in kaizeval.yaml: connect, generate or reuse tests, let the testers call the
         agent, let the reviewers score the answers, and return scores, failed cases, recommendations and
-        a paired comparison with the baseline run. Safe to call repeatedly."""
+        a paired comparison with the baseline run. Safe to call repeatedly.
+
+        Set continue_improvement=true only after the USER chose to keep improving when the loop had
+        stopped: the improvement loop then goes on from its candidate instead of starting over."""
         try:
             return {"ok": True, **run_project(Path(config_path), url=_url(), holdout=final_holdout_check,
-                                              regenerate=regenerate_tests, reset_baseline=reset_baseline, log=_log)}
+                                              regenerate=regenerate_tests, reset_baseline=reset_baseline,
+                                              continue_=continue_improvement, log=_log)}
         except ProjectError as exc:
             return {"ok": False, "error": str(exc)}
 

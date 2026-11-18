@@ -85,10 +85,13 @@ evaluation:
   # repeats: 3             # ask every question this many times and average (for agents whose answers vary)
 
 # --- 6. Automatic improvement (only for agents with candidate_protocol: true) --------------
-# The loop stops when the target is reached, or when two cycles in a row leave the score
-# unchanged. It then exits with the remaining recommendations and a report.
+# The loop stops when the target is reached, or when three cycles in a row leave the score
+# unchanged. It then exits with the remaining recommendations and a report, and waits for you:
+# `kaizeval run --continue` keeps improving from where it stopped, `kaizeval release approve`
+# releases the improved version as it is.
 optimize:
   enabled: false
+  # stagnation_rounds: 3   # unchanged cycles in a row before the loop stops
   # max_rounds: 20         # optional extra limit on the number of cycles
 """
 
@@ -98,7 +101,7 @@ DEFAULTS: dict[str, Any] = {
     "tests": {"cases": 30, "testers": 3, "holdout_fraction": 0.3, "languages": [], "import": [], "seed": 0},
     "evaluation": {"reviewers": 2, "target": 1.0, "require_citations": True, "repeats": 1,
                    "max_agent_calls": None, "max_model_calls": None},
-    "optimize": {"enabled": False, "max_rounds": None, "stagnation_rounds": 2},
+    "optimize": {"enabled": False, "max_rounds": None, "stagnation_rounds": 3},
 }
 
 Log = Callable[[str], None]
@@ -260,20 +263,24 @@ def _mode(reviewers: int) -> str:
 
 
 def run_project(config_path: Path, *, url: str | None = None, holdout: bool = False, regenerate: bool = False,
-                reset_baseline: bool = False, log: Log = print) -> dict[str, Any]:
-    """Run the journey described by the project file and return a machine-readable result."""
+                reset_baseline: bool = False, continue_: bool = False, log: Log = print) -> dict[str, Any]:
+    """Run the journey described by the project file and return a machine-readable result.
+
+    With ``continue_`` the improvement loop goes on from the candidate of the previous run instead
+    of starting again from the baseline."""
     config_path = config_path.resolve()
     root = config_path.parent
     config = load_config(config_path)
     with Engine(config, root, url, log) as engine:
         try:
-            return _run(engine, config, root, holdout=holdout, regenerate=regenerate, reset_baseline=reset_baseline, log=log)
+            return _run(engine, config, root, holdout=holdout, regenerate=regenerate, reset_baseline=reset_baseline,
+                        resume=continue_, log=log)
         except ApiError as exc:
             raise ProjectError(f"{exc.code}: {exc.message}") from exc
 
 
 def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, regenerate: bool,
-         reset_baseline: bool, log: Log) -> dict[str, Any]:
+         reset_baseline: bool, resume: bool, log: Log) -> dict[str, Any]:
     api, state = engine.api, engine.state
     notes: list[str] = []
 
@@ -287,7 +294,8 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
     if not ws:
         ws = api.call("POST", "/workspaces", json={"name": config["project"], "mode": config["network"]})["id"]
         # keep the local account; everything that lived in the old workspace is recreated below
-        for key in ("provider", "agent", "spec", "dataset", "baseline_run_id", "candidate_id"):
+        for key in ("provider", "agent", "spec", "dataset", "baseline_run_id", "candidate_id", "optimization_run_id",
+                    "last_overall", "unchanged_runs"):
             state.pop(key, None)
         state["workspace_id"] = ws
     base = f"/workspaces/{ws}"
@@ -335,7 +343,7 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
                     "credential": _secret(agent_cfg.get("api_key_env"), "agent.api_key_env")}
         agent = api.call("POST", f"{base}/agents", json={"name": config["project"], **body})
         state["agent"] = {"id": agent["id"], "fingerprint": fingerprint}
-        for key in ("baseline_run_id", "candidate_id"):
+        for key in ("baseline_run_id", "candidate_id", "optimization_run_id"):
             state.pop(key, None)
     agent_id = state["agent"]["id"]
     verified = api.call("POST", f"{base}/agents/{agent_id}/verify")
@@ -392,7 +400,7 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
             raise ProjectError("there is nothing to test with: configure a model and knowledge files so tests can be "
                                "generated, or list your own questions under tests.import")
         state["dataset"] = {"id": dataset_id, "fingerprint": dataset_fp}
-        for key in ("baseline_run_id", "candidate_id"):
+        for key in ("baseline_run_id", "candidate_id", "optimization_run_id"):
             state.pop(key, None)
     dataset_id = state["dataset"]["id"]
     counts = api.call("GET", f"{base}/datasets/{dataset_id}")["counts"]
@@ -441,11 +449,16 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
             baseline_id = None
     if not baseline_id:
         state["baseline_run_id"] = run["id"]
-    # Two runs in a row with the same score mean the last change made no difference.
+    # The same stop rule as the improvement loop, applied to repeated runs: count the runs in a row
+    # that left the score where it was. Choosing to continue starts the count again.
+    stall_after = max(1, int(config["optimize"]["stagnation_rounds"]))
     previous_overall = state.get("last_overall")
-    stalled = (previous_overall is not None and summary["overall"] is not None
-               and abs(previous_overall - summary["overall"]) < 1e-9 and state.get("last_dataset_id") == dataset_id)
+    same = (previous_overall is not None and summary["overall"] is not None
+            and abs(previous_overall - summary["overall"]) < 1e-9 and state.get("last_dataset_id") == dataset_id)
+    unchanged = (0 if resume else int(state.get("unchanged_runs") or 0)) + 1 if same else 0
+    stalled = unchanged >= stall_after
     state["last_run_id"], state["last_overall"], state["last_dataset_id"] = run["id"], summary["overall"], dataset_id
+    state["unchanged_runs"] = unchanged
 
     # 7. automatic improvement of an isolated candidate, when the agent supports it
     optimization = None
@@ -461,17 +474,49 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
         if mode == "deterministic":
             raise ProjectError("automatic optimization needs a model (the optimizer role); add a model block")
         api.call("PATCH", base, json={"settings": {"allow_autonomous_optimization": True}})
-        body = {"agent_id": agent_id, "dataset_id": dataset_id, "mode": "autonomous", "policy": {
-            "max_rounds": config["optimize"]["max_rounds"], "stagnation_rounds": int(config["optimize"]["stagnation_rounds"]),
-            "target_score": target, "eval_mode": mode, "eval_config": eval_config, "limits": limits, "run_holdout": True}}
+        stop_policy: dict[str, Any] = {"max_rounds": config["optimize"]["max_rounds"], "stagnation_rounds": stall_after,
+                                       "target_score": target, "limits": limits, "run_holdout": True}
+        measurement = {"eval_mode": mode, "eval_config": eval_config}
+        previous = state.get("optimization_run_id")
+
+        def start() -> dict[str, Any]:
+            if resume and previous:
+                return api.call("POST", f"{base}/optimization-runs/{previous}/continue", json={"policy": stop_policy})
+            return api.call("POST", f"{base}/optimization-runs", json={
+                "agent_id": agent_id, "dataset_id": dataset_id, "mode": "autonomous", "policy": {**stop_policy, **measurement}})
+
+        if resume and not previous:
+            notes.append("There was no stopped improvement loop to continue, so a new one was started.")
+        elif previous and not resume:
+            notes.append("The candidate of the previous run was still waiting for a decision. This run started a new "
+                         "loop from the baseline; use `kaizeval run --continue` to go on from that candidate instead.")
         try:
-            opt = api.call("POST", f"{base}/optimization-runs", json=body)
+            try:
+                opt = start()
+            except ApiError as exc:
+                if exc.code != "HOLDOUT_SPENT":
+                    raise
+                try:
+                    api.wait_job(ws, api.call("POST", f"{base}/datasets/{dataset_id}/holdout:rotate", json={}))
+                    notes.append("The previous holdout had already informed a decision, so a fresh one was generated; "
+                                 "the retired holdout cases joined the regression set.")
+                except ApiError as failed:
+                    if failed.code != "JOB_FAILED":
+                        raise
+                    # Better an honest run without the final check than no run at all.
+                    stop_policy["run_holdout"] = False
+                    notes.append(f"A fresh holdout could not be generated ({failed.message}). The previous holdout has "
+                                 "already informed a decision, so this run has NO independent holdout check: treat its "
+                                 "result as a regression-set result only.")
+                opt = start()
         except ApiError as exc:
-            if exc.code != "HOLDOUT_SPENT":
+            if not (resume and previous and exc.code in ("NOT_CONTINUABLE", "NOT_FOUND")):
                 raise
-            api.wait_job(ws, api.call("POST", f"{base}/datasets/{dataset_id}/holdout:rotate", json={}))
-            notes.append("The previous holdout had already informed a decision, so a fresh one was generated.")
-            opt = api.call("POST", f"{base}/optimization-runs", json=body)
+            notes.append(f"The previous improvement loop could not be continued ({exc.message}), so a new one was started.")
+            previous = None
+            opt = start()
+        state["optimization_run_id"] = opt["optimization_run"]["id"]
+        engine.save()
         api.wait_job(ws, opt["job"])
         report = api.call("GET", f"{base}/reports/{opt['optimization_run']['id']}")
         report_id = report["id"]
@@ -479,12 +524,22 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
         final_overall = best.get("overall") if best.get("overall") is not None else final_overall
         # The optimization measures the same baseline again. If the two measurements differ, the
         # agent's answers vary from run to run, and small score changes cannot be trusted.
+        # (Only when both measurements used the same cases: a rotated holdout makes the set larger.)
         measured_again = (report.get("baseline") or {}).get("overall")
-        if measured_again is not None and summary["overall"] is not None and abs(measured_again - summary["overall"]) >= 0.02:
+        same_cases = (report.get("baseline") or {}).get("cases") == summary["cases"]
+        if (same_cases and measured_again is not None and summary["overall"] is not None
+                and abs(measured_again - summary["overall"]) >= 0.02):
             noise = abs(measured_again - summary["overall"])
             notes.append(f"The agent's answers vary between identical runs: the same baseline version scored "
                          f"{summary['overall']:.1%} and then {measured_again:.1%}. Treat changes smaller than about "
                          f"{noise * 100:.0f} percentage points as noise, and set evaluation.repeats to 2 or more to average it out.")
+        resumed = (report.get("continuations") or [None])[-1] if resume and previous else None
+        if resumed and (resumed.get("test_set_changed") or resumed.get("baseline_changed_by_owner")):
+            why = " and ".join(part for part, on in (("the regression set grew", resumed.get("test_set_changed")),
+                                                     ("the agent's baseline was changed", resumed.get("baseline_changed_by_owner"))) if on)
+            notes.append(f"Since the last stop {why}, so both versions were measured again: baseline "
+                         f"{resumed['baseline_overall']:.1%}, candidate {resumed['best_overall']:.1%} before the new cycles. "
+                         "Scores from before the continuation are not comparable with these.")
         candidate = report.get("candidate") or {}
         state["candidate_id"] = candidate.get("id")
         ab = (report.get("regression_comparison") or {}).get("overall")
@@ -500,6 +555,9 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
                  "why_not_automatic": r["auto_apply_blocker"]} for r in report.get("remaining_recommendations") or []],
             "candidate": {"id": candidate.get("id"), "status": candidate.get("status"),
                           "diff_from_baseline": candidate.get("diff_from_baseline")},
+            "continuations": len(report.get("continuations") or []),
+            "scores_comparable_with_previous_run": not any(c.get("test_set_changed") for c in report.get("continuations") or []),
+            "decision_options": (report.get("next_decision") or {}).get("options") or [],
         }
         log(f"[7/7] optimization {report['status']} ({report['stop_reason']}): best {final_overall:.1%} "
             f"after {report['rounds']} round(s)")
@@ -520,12 +578,23 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
 
     target_met = final_overall is not None and final_overall >= target - 1e-9
     next_steps: list[str] = []
-    if optimization and (optimization["candidate"] or {}).get("status") == "awaiting_decision":
-        next_steps.append("Candidate B is waiting for your decision. Nothing was changed in production. "
-                          "Run `kaizeval release approve` to promote it, or `kaizeval release reject`.")
+    options = (optimization or {}).get("decision_options") or []
+    stop_reason = (optimization or {}).get("stop_reason")
+    if "release" in options:
+        next_steps.append(f"The loop stopped ({stop_reason}). Candidate B is waiting for your decision; "
+                          "nothing was changed in production. Review the report and apply the recommendations you agree "
+                          "with, then choose: `kaizeval run --continue` to keep improving from Candidate B, "
+                          "`kaizeval release approve` to release it as it is, or `kaizeval release reject`.")
+    elif "continue" in options and not target_met:
+        next_steps.append(f"The loop stopped ({stop_reason}) without keeping any change, so there is "
+                          "nothing to release. Review the report, apply the recommendations to the agent, then run "
+                          "`kaizeval run --continue`.")
     elif not target_met and stalled:
-        next_steps.append("Two runs in a row scored the same, so the loop stops here: the last change made no "
-                          "difference. The report and the recommendations describe what still fails.")
+        options = ["continue"]
+        next_steps.append(f"The score did not change in {unchanged} runs in a row, so the loop stops here: the last "
+                          "changes made no difference. Review the report and the recommendations, which describe what "
+                          "still fails. To keep going after changing the agent, run `kaizeval run --continue`; "
+                          "otherwise release the agent as it is with your own process.")
     elif not target_met:
         if recommendations:
             next_steps.append("Apply the recommendations to your agent, then run `kaizeval run` again: the next run "
@@ -544,6 +613,7 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
         "overall": summary["overall"], "pass_rate": summary["pass_rate"], "critical_failures": summary["critical_failures"],
         "by_category": summary["by_category"], "by_dimension": summary["by_dimension"],
         "target": target, "final_overall": final_overall, "target_met": target_met, "stalled": bool(stalled),
+        "unchanged_runs": unchanged, "decision_options": options,
         "failures": failures, "recommendations": recommendations, "comparison_with_baseline": comparison,
         "optimization": optimization, "holdout": holdout_result, "report": str(report_path),
         "console": engine.url, "notes": notes, "next_steps": next_steps,
@@ -569,11 +639,13 @@ def release(config_path: Path, decision: str, *, url: str | None = None, note: s
                 "decision": "approved" if decision == "approve" else "rejected", "note": note})
             if decision == "reject":
                 engine.state.pop("candidate_id", None)
+                engine.state.pop("optimization_run_id", None)
                 return {"decision": "rejected", "candidate_status": decided["candidate"]["status"], "production": "unchanged"}
             promoted = engine.api.call("POST", f"{base}/candidates/{candidate_id}/promote")
         except ApiError as exc:
             raise ProjectError(f"{exc.code}: {exc.message}") from exc
         engine.state.pop("candidate_id", None)
+        engine.state.pop("optimization_run_id", None)
         return {"decision": "approved", "candidate_status": promoted["candidate"]["status"], "production": promoted["result"]}
 
 

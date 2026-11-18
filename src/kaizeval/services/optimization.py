@@ -52,7 +52,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "target_score": None,
     "min_improvement": 0.005,
     # Stop when this many cycles in a row end with the same score as before them.
-    "stagnation_rounds": 2,
+    "stagnation_rounds": 3,
     "max_category_regression": 0.05,
     "allow_new_critical_failures": False,
     "category_minimums": {},
@@ -62,6 +62,10 @@ DEFAULT_POLICY: dict[str, Any] = {
     "run_holdout": True,
     "limits": {},  # max_model_calls, max_model_tokens, max_model_cost, max_agent_calls
 }
+
+
+# What the owner may adjust when continuing a stopped run.
+CONTINUE_POLICY_KEYS = ("max_rounds", "stagnation_rounds", "target_score", "min_improvement", "limits", "run_holdout")
 
 
 class OptimizationError(Exception):
@@ -128,6 +132,59 @@ def create_optimization_run(db: Session, *, workspace_id: str, agent_id: str, da
     db.flush()
     audit.record(db, workspace_id=workspace_id, user_id=user_id, action="optimization.created",
                  subject_type="optimization_run", subject_id=run.id, detail={"mode": mode, "policy": merged})
+    return run
+
+
+def continue_run(db: Session, run: OptimizationRun, *, policy: dict[str, Any] | None, user_id: str) -> OptimizationRun:
+    """Reopen a stopped run so the loop goes on from its candidate instead of starting over.
+
+    The owner reviewed the report, possibly changed the agent by hand, and chose to keep improving
+    rather than to release. Everything is measured again before the first new cycle (see `_resume`).
+    """
+    if run.status not in ("completed", "cancelled"):
+        raise OptimizationError("NOT_CONTINUABLE", f"the run is '{run.status}'; only a stopped run can be continued")
+    candidate = db.get(Candidate, run.candidate_id) if run.candidate_id else None
+    if candidate is None:
+        raise OptimizationError("NOT_CONTINUABLE", "this run has no candidate; start a new optimization")
+    if candidate.status in ("promoted", "rolled_back"):
+        raise OptimizationError("NOT_CONTINUABLE", "this candidate was already released; start a new optimization")
+    decisions = list(db.scalars(select(Approval).where(Approval.subject_type == "candidate", Approval.subject_id == candidate.id,
+                                                       Approval.action == "promote")))
+    if any(a.decision == "rejected" for a in decisions):
+        raise OptimizationError("NOT_CONTINUABLE", "this candidate was rejected; start a new optimization")
+    workspace = db.get(Workspace, run.workspace_id)
+    assert workspace is not None
+    if run.mode == "autonomous" and not (workspace.settings or {}).get("allow_autonomous_optimization"):
+        raise OptimizationError("POLICY_BLOCKED", "autonomous optimization is disabled for this workspace")
+    unknown = sorted(set(policy or {}) - set(CONTINUE_POLICY_KEYS))
+    if unknown:
+        raise OptimizationError("INVALID_POLICY", f"cannot change {', '.join(unknown)} when continuing a run")
+    merged = {**run.policy, **(policy or {})}
+    dataset = db.get(Dataset, run.dataset_id)
+    assert dataset is not None
+    if merged["run_holdout"] and split_counts(db, run.dataset_id).get("holdout") and dataset.holdout_exposed:
+        raise OptimizationError("HOLDOUT_SPENT", "the holdout already informed the previous stop; rotate it before "
+                                "continuing, or continue with run_holdout set to false")
+    # An approval was given for the candidate as it was. It must not release what the candidate becomes.
+    for approval in decisions:
+        if not approval.consumed:
+            approval.consumed = True
+            approval.note = ((approval.note or "") + " [void: the run was continued after this approval]").strip()
+    state = dict(run.state or {})
+    continuations = list(state.get("continuations") or [])
+    continuations.append({"at": utcnow().isoformat(), "by": user_id, "after_round": state.get("round", 0),
+                          "previous_stop_reason": run.stop_reason, "previous_best_overall": state.get("best_overall"),
+                          "previous_holdout": run.holdout})
+    state.update({"phase": "resume", "continuations": continuations, "stagnation": 0, "pending_patch_id": None,
+                  "round_base": state.get("round", 0)})
+    state.setdefault("history", [])
+    candidate.status = "active"
+    run.policy, run.state = merged, state
+    run.status, run.stop_reason, run.error, run.holdout, run.finished_at = "queued", None, None, None, None
+    audit.record(db, workspace_id=run.workspace_id, user_id=user_id, action="optimization.continued",
+                 subject_type="optimization_run", subject_id=run.id,
+                 detail={"after_round": state["round_base"], "policy_changes": policy or {}})
+    db.flush()
     return run
 
 
@@ -247,6 +304,63 @@ def _fail(db: Session, run: OptimizationRun, message: str) -> None:
     db.commit()
 
 
+def _resume(db: Session, run: OptimizationRun, state: dict[str, Any], adapter: AgentAdapter, info: dict[str, Any],
+            ctx: JobContext | None) -> bool:
+    """First step of a continued run: bring the candidate in line with the agent as it is now and
+    measure both versions again, because the owner may have changed the agent since the stop.
+
+    Returns False when the run failed."""
+    candidate = db.get(Candidate, run.candidate_id)
+    assert candidate is not None
+    schema = info.get("schema") or {}
+    # The changes this run kept so far, carried over onto the baseline as it is today.
+    kept = {key: value for key, value in (candidate.config_snapshot or {}).items()
+            if key in schema and (candidate.baseline_snapshot or {}).get(key) != value}
+    desired = {**info["config"], **kept}
+    try:
+        adapter.inspect(candidate.external_id)
+    except AdapterError as exc:
+        if exc.code in ("CONNECTION_ERROR", "TIMEOUT", "EGRESS_BLOCKED", "INSUFFICIENT_PERMISSION", "AUTH"):
+            raise
+        candidate.external_id = adapter.create_candidate()  # the agent was restarted and forgot its copies
+    adapter.restore_candidate(candidate.external_id, desired)
+    if adapter.inspect("baseline").get("digest", "") != info.get("digest", ""):
+        _fail(db, run, "NO_SAFE_ISOLATION: the baseline configuration changed while restoring the candidate")
+        return False
+    baseline_changed = (info.get("digest", "") != candidate.baseline_digest)
+    candidate.baseline_snapshot, candidate.baseline_digest = dict(info["config"]), info.get("digest", "")
+    candidate.config_snapshot = dict(desired)
+    db.commit()
+
+    earlier = db.get(EvaluationRun, run.baseline_run_id) if run.baseline_run_id else None
+    baseline_run = _evaluate(db, run, "baseline", "baseline", ctx)
+    if baseline_run.status != "completed":
+        _fail(db, run, f"baseline evaluation failed: {baseline_run.error}")
+        return False
+    # A rotated holdout retires its old cases into the regression set, so earlier scores were on fewer cases.
+    test_set_changed = earlier is not None and earlier.dataset_version != baseline_run.dataset_version
+    best_run = baseline_run
+    if desired != info["config"]:
+        best_run = _evaluate(db, run, candidate.external_id, "candidate", ctx)
+        if best_run.status != "completed":
+            _fail(db, run, f"candidate evaluation failed: {best_run.error}")
+            return False
+        db.add(Experiment(workspace_id=run.workspace_id, optimization_run_id=run.id, round=state.get("round", 0),
+                          kind="regression", baseline_run_id=baseline_run.id, candidate_run_id=best_run.id,
+                          comparison=compare_runs(db, baseline_run, best_run), decision="continued"))
+    run.baseline_run_id, run.best_run_id = baseline_run.id, best_run.id
+    run.synthetic = bool(run.synthetic or baseline_run.synthetic or best_run.synthetic)
+    baseline_overall = (baseline_run.summary or {}).get("overall") or 0.0
+    best_overall = (best_run.summary or {}).get("overall") or 0.0
+    state["continuations"][-1].update({"baseline_changed_by_owner": baseline_changed, "test_set_changed": test_set_changed,
+                                       "regression_cases": (baseline_run.summary or {}).get("cases"),
+                                       "baseline_overall": baseline_overall, "best_overall": best_overall})
+    state.update({"phase": "propose", "baseline_overall": baseline_overall, "best_overall": best_overall,
+                  "stagnation": 0, "pending_patch_id": None})
+    _save(db, run, state)
+    return True
+
+
 def advance(db: Session, run_id: str, ctx: JobContext | None = None) -> OptimizationRun:
     """Drive the optimization state machine until it finishes, fails or pauses for a human decision."""
     run = db.get(OptimizationRun, run_id)
@@ -287,6 +401,9 @@ def advance(db: Session, run_id: str, ctx: JobContext | None = None) -> Optimiza
                          subject_type="candidate", subject_id=created.id,
                          detail={"external_id": external_id, "baseline_digest": created.baseline_digest})
             _save(db, run, state)
+        elif state.get("phase") == "resume":
+            if not _resume(db, run, state, adapter, info, ctx):
+                return run
 
         candidate = db.get(Candidate, run.candidate_id) if run.candidate_id else None
         assert candidate is not None
@@ -306,7 +423,9 @@ def advance(db: Session, run_id: str, ctx: JobContext | None = None) -> Optimiza
                     _finalize(db, run, state, f"the score did not change in {state['stagnation']} consecutive cycles", ctx)
                     return run
                 max_rounds = policy.get("max_rounds")
-                if state["round"] >= int(max_rounds if max_rounds is not None else HARD_ROUND_LIMIT):
+                # An explicit limit counts the cycles since the start or since the last continuation.
+                done = state["round"] - (int(state.get("round_base") or 0) if max_rounds is not None else 0)
+                if done >= int(max_rounds if max_rounds is not None else HARD_ROUND_LIMIT):
                     _finalize(db, run, state, "maximum number of rounds reached", ctx)
                     return run
                 budget = _budget_reason(db, run)
@@ -553,5 +672,5 @@ def rollback_production(db: Session, candidate: Candidate, *, user_id: str, note
     return result
 
 
-__all__ = ["DEFAULT_POLICY", "OptimizationError", "advance", "approve_promotion", "create_optimization_run",
+__all__ = ["DEFAULT_POLICY", "OptimizationError", "advance", "approve_promotion", "continue_run", "create_optimization_run",
            "decide_patch", "promote", "rollback_production", "validate_patch"]

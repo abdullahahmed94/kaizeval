@@ -5,7 +5,7 @@ checked by hand, and what is not done. Run the evidence yourself:
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 120 tests; strict offline; fails on any non-loopback connection
+pytest                 # 131 tests; strict offline; fails on any non-loopback connection
 kaizeval demo          # the whole journey on the bundled sample agent
 ```
 
@@ -31,7 +31,7 @@ That needs a real model that you configure.
 | 2 | PDF/DOCX/TXT/MD ingestion with traceable evidence and source citations | Done | `tests/test_documents.py` (file, version, SHA-256, page or section, character offsets, verbatim quote) |
 | 3 | Requirements or inferred specification with Review / Edit / Skip and version history | Done | `test_specification_review_edit_skip_and_versions`, `test_requirements_work_without_a_model_but_inference_does_not` |
 | 4 | Tagged cases, coverage, regression/holdout split with enforced isolation | Done | `test_dataset_generation_split_and_coverage`, `test_holdout_is_sealed`, `test_holdout_stays_sealed_from_the_optimizer` |
-| 5 | A real configured model is routed through the gateway; a clearly flagged mock runs CI without secrets | Done for one local model | Automated: the OpenAI-compatible path against a local mock server (`tests/test_gateway.py`). Manual: every role, test generation, three review modes and two optimization loops against `qwen2.5:7b` on Ollama, recorded in [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md). No hosted provider was exercised |
+| 5 | A real configured model is routed through the gateway; a clearly flagged mock runs CI without secrets | Done for one local model | Automated: the OpenAI-compatible path against a local mock server (`tests/test_gateway.py`). Manual: every role, test generation, three review modes, two optimization loops and one continuation against `qwen2.5:7b` on Ollama, recorded in [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md). No hosted provider was exercised |
 | 6 | Single and Dual + Arbiter evaluation; disagreement, uncertainty and evidence stay visible | Done | `test_single_evaluation_with_evidence_and_separate_costs`, `test_dual_judges_are_independent_and_arbitrated` |
 | 7 | Recommendations with reasons; read-only HTTP agents are not offered auto-patching | Done | `test_findings_and_recommendations`, `test_black_box_agent_gets_recommendations_only` |
 | 8 | Immutable A, isolated B, patch only B, paired A/B, full regression, rollback | Done | `test_optimization_improves_candidate_and_leaves_baseline_untouched`, `test_every_round_reruns_full_regression_and_is_paired`, `test_failing_gates_roll_the_candidate_back` |
@@ -39,6 +39,7 @@ That needs a real model that you configure.
 | 10 | Reports: per-category scores, percentage-point deltas, evidence, latency, model usage and separate agent cost | Done | `test_report_shows_deltas_usage_and_caveats`, `test_single_evaluation_with_evidence_and_separate_costs` |
 | 11 | Workspace isolation, secret redaction, offline no-egress | Done at application level | `test_workspaces_are_isolated`, `test_credentials_are_never_returned`, `tests/test_security_and_network.py`, the socket guard in `tests/conftest.py`. The network-layer variant (`docker-compose.offline.yml`) was not run |
 | + | One file and one command (`kaizeval init`, `kaizeval run`), a chosen number of testers and reviewers, and MCP tools for coding assistants | Done | `tests/test_project.py` (including a run in a fresh process with its own embedded engine), `test_panel_of_reviewers_and_parallel_testers`, `test_several_independent_testers_write_the_tests` |
+| + | The loop stops after three unchanged cycles and hands the decision to the owner: continue from the candidate, or release it | Done | `tests/test_stop_rule.py`, `tests/test_continue.py` (continue, voided approvals, refusals, a restarted and changed agent), `test_the_terminal_asks_continue_or_release`, `test_a_fresh_holdout_asks_what_was_not_asked_before`. Manual: one continuation against `qwen2.5:7b` (run 4 in [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md)) |
 | 12 | A fresh checkout completes an end-to-end demo without a paid key, with labelled synthetic results | Done | `tests/test_cli.py` drives the same journey as `kaizeval demo` over HTTP. CI also runs `kaizeval demo` from the built wheel and starts the Docker Compose stack |
 
 ## Verified by hand, not by automated tests

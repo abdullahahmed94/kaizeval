@@ -59,7 +59,7 @@ function StartForm() {
   const [mode, setMode] = useState("human_guided");
   const [maxRounds, setMaxRounds] = useState("");
   const [targetScore, setTargetScore] = useState("");
-  const [stagnation, setStagnation] = useState("2");
+  const [stagnation, setStagnation] = useState("3");
   const [minImprovement, setMinImprovement] = useState("0.5");
   const [maxRegression, setMaxRegression] = useState("5");
   const [evalMode, setEvalMode] = useState("single");

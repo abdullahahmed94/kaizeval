@@ -220,6 +220,11 @@ class OptimizationCreate(BaseModel):
     policy: dict[str, Any] = Field(default_factory=dict)
 
 
+class OptimizationContinue(BaseModel):
+    # Optional changes: max_rounds, stagnation_rounds, target_score, min_improvement, limits, run_holdout
+    policy: dict[str, Any] = Field(default_factory=dict)
+
+
 class Decision(BaseModel):
     decision: Literal["approved", "rejected"]
     note: str | None = Field(default=None, max_length=2000)
@@ -271,6 +276,28 @@ def start_optimization(body: OptimizationCreate, request: Request, ctx: Ctx = De
     if run.job_id is None:
         run.job_id = job.id
         ctx.db.commit()
+    ctx.db.refresh(job)
+    return {"job": job_dict(job), "optimization_run": _opt_dict(ctx, run)}
+
+
+@router.post("/optimization-runs/{run_id}/continue", status_code=202)
+def continue_optimization(run_id: str, body: OptimizationContinue | None = None,
+                          ctx: Ctx = Depends(workspace_ctx("editor"))) -> dict[str, Any]:
+    """Keep improving from the candidate of a stopped run instead of releasing it. Both versions are measured again first."""
+    run = scoped(ctx, OptimizationRun, run_id)
+    if run.mode == "autonomous":
+        ctx.require("owner")
+    try:
+        optimization.continue_run(ctx.db, run, policy=(body.policy if body else None), user_id=ctx.user.id)
+    except optimization.OptimizationError as exc:
+        raise fail(409, exc.code, exc.message) from exc
+    ctx.db.commit()
+    job = jobs.enqueue(ctx.db, workspace_id=ctx.ws, kind="optimization.run", payload={"optimization_run_id": run_id},
+                       created_by=ctx.user.id)
+    ctx.db.expire_all()
+    run = scoped(ctx, OptimizationRun, run_id)
+    run.job_id = job.id
+    ctx.db.commit()
     ctx.db.refresh(job)
     return {"job": job_dict(job), "optimization_run": _opt_dict(ctx, run)}
 

@@ -87,15 +87,24 @@ def test_black_box_agent_without_any_model(tmp_path, remote, sample_agent, capsy
     comparison = second["comparison_with_baseline"]
     assert comparison["baseline_run_id"] == first["run_id"] and comparison["n"] == first["cases"]
     assert comparison["delta_percentage_points"] == 0 and comparison["verdict"] == "inconclusive"
-    # two runs in a row with the same score: the loop says so and stops instead of going on blindly
-    assert first["stalled"] is False and second["stalled"] is True
-    assert any("Two runs in a row scored the same" in step for step in second["next_steps"])
+    # one unchanged run is not enough to stop
+    assert first["stalled"] is False and second["stalled"] is False and second["unchanged_runs"] == 1
+    assert second["decision_options"] == [] and "Apply the recommendations" in second["next_steps"][0]
     state = json.loads((tmp_path / ".kaizeval" / "project-state.json").read_text(encoding="utf-8"))
     assert state["baseline_run_id"] == first["run_id"] and state["last_run_id"] == second["run_id"]
 
     assert cli.main(["run", "-c", str(path), "--url", remote, "--no-input"]) == cli.EXIT_QUALITY_GATE
     text = capsys.readouterr().out
     assert "vs baseline run" in text and "target not met" in text and "recommendations:" in text
+
+    # three runs in a row with an unchanged score: the loop says so and stops instead of going on blindly
+    fourth = run_project(path, url=remote, log=_quiet)
+    assert fourth["stalled"] is True and fourth["unchanged_runs"] == 3 and fourth["decision_options"] == ["continue"]
+    assert any("did not change in 3 runs in a row" in step and "kaizeval run --continue" in step for step in fourth["next_steps"])
+    # the user may still choose to go on; the count starts again
+    assert cli.main(["run", "-c", str(path), "--url", remote, "--json", "--no-input", "--continue"]) == cli.EXIT_QUALITY_GATE
+    fifth = json.loads(capsys.readouterr().out)
+    assert fifth["stalled"] is False and fifth["unchanged_runs"] == 1
 
 
 def test_full_loop_with_testers_reviewers_and_optimization(tmp_path, remote, sample_agent, monkeypatch):
@@ -112,7 +121,7 @@ def test_full_loop_with_testers_reviewers_and_optimization(tmp_path, remote, sam
         "instructions_file": "system.md", "knowledge": ["docs/*.md"],
         "tests": {"cases": 24, "testers": 3, "holdout_fraction": 0.3},
         "evaluation": {"reviewers": 3, "target": 1.0},
-        "optimize": {"enabled": True, "max_rounds": 6},
+        "optimize": {"enabled": True, "max_rounds": 2},
     })
     result = run_project(path, url=remote, log=_quiet)
     assert result["synthetic"] is True and result["mode"] == "panel"
@@ -126,8 +135,28 @@ def test_full_loop_with_testers_reviewers_and_optimization(tmp_path, remote, sam
     assert optimization["candidate"]["status"] == "awaiting_decision" and optimization["candidate"]["diff_from_baseline"]
     assert result["final_overall"] == optimization["best_overall"] and result["target"] == 1.0
     assert result["target_met"] is (result["final_overall"] >= 1.0)  # 100% is a target, never a promise
-    assert any("waiting for your decision" in step for step in result["next_steps"])
-    assert "Independent holdout validation" in Path(result["report"]).read_text(encoding="utf-8")
+    # the loop has stopped: the user reviews the report, then continues or releases
+    assert optimization["decision_options"] == result["decision_options"] == ["continue", "release", "reject"]
+    step = next(step for step in result["next_steps"] if "waiting for your decision" in step)
+    assert "kaizeval run --continue" in step and "kaizeval release approve" in step and optimization["stop_reason"] in step
+    report_text = Path(result["report"]).read_text(encoding="utf-8")
+    assert "Independent holdout validation" in report_text and "## Your decision" in report_text
+
+    # "continue": the same candidate goes on improving; it does not start again from the baseline
+    more = run_project(path, url=remote, continue_=True, log=_quiet)
+    continued = more["optimization"]
+    assert continued["continuations"] == 1 and continued["candidate"]["id"] == optimization["candidate"]["id"]
+    assert continued["rounds"] > optimization["rounds"] and continued["best_overall"] > continued["baseline_overall"]
+    # the fresh holdout retired the old one into the regression set: more cases, so the scores are not comparable
+    assert continued["scores_comparable_with_previous_run"] is False
+    assert any("the regression set grew" in note and "not comparable" in note for note in more["notes"])
+    # a different score on a larger set is not "the agent's answers vary"
+    assert not any("vary between identical runs" in note for note in more["notes"])
+    assert [c["patch"] for c in continued["changes"]][:len(optimization["changes"])] == [c["patch"] for c in optimization["changes"]]
+    assert continued["holdout"]["status"] == "completed"  # validated again, on a fresh holdout
+    assert any("fresh one was generated" in note for note in more["notes"])
+    assert continued["candidate"]["status"] == "awaiting_decision"
+    assert "Continued after round" in Path(more["report"]).read_text(encoding="utf-8")
 
     # nothing was promoted by the run; the release decision is a separate, explicit step
     admin = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -138,6 +167,10 @@ def test_full_loop_with_testers_reviewers_and_optimization(tmp_path, remote, sam
     assert httpx.get(pointer, headers=admin, trust_env=False).json()["production"].startswith("cand-")
     with pytest.raises(ProjectError):
         release(path, "approve", url=remote, log=_quiet)  # nothing is waiting any more
+    # after a release there is nothing to continue, so a new loop is started and says so
+    fresh = run_project(path, url=remote, continue_=True, log=_quiet)
+    assert any("no stopped improvement loop to continue" in note for note in fresh["notes"])
+    assert fresh["optimization"] is None or fresh["optimization"]["continuations"] == 0
     # put the shared sample agent back so other tests see an untouched production pointer
     httpx.post(sample_agent["url"] + "/admin/promote", headers=admin, trust_env=False,
                json={"candidate_id": "baseline", "approval_id": "test-cleanup"}).raise_for_status()
@@ -203,8 +236,50 @@ def test_mcp_tools(tmp_path, remote, sample_agent, monkeypatch):
     tools, empty, ran, last, refused, created = asyncio.run(session())
     assert set(tools) == {"init_project", "evaluate_agent", "last_result", "release_candidate"}
     assert "USER" in tools["release_candidate"].description
+    schema = getattr(tools["evaluate_agent"], "input_schema", None) or getattr(tools["evaluate_agent"], "inputSchema", {})
+    assert "continue_improvement" in schema["properties"] and "USER" in tools["evaluate_agent"].description
     assert empty["ok"] is False
     assert ran["ok"] is True and ran["cases"] + ran["holdout_cases"] == 6 and ran["target_met"] is False
     assert last["run_id"] == ran["run_id"]
     assert refused["ok"] is False and "no candidate" in refused["error"]
     assert created["ok"] is True and (tmp_path / "new" / "kaizeval.yaml").exists()
+
+
+@pytest.mark.parametrize("answers,expected_runs,expected_release", [
+    (["c", "r"], [False, True], ["approve"]),      # continue once, then release what came out
+    (["x"], [False], ["reject"]),
+    ([""], [False], []),                           # Enter: decide later, nothing is recorded
+    (["c", ""], [False, True], []),
+])
+def test_the_terminal_asks_continue_or_release(monkeypatch, capsys, answers, expected_runs, expected_release):
+    """When the loop has stopped, `kaizeval run` asks the person what to do and never decides by itself."""
+    import kaizeval.project as project
+
+    runs, releases, pending = [], [], list(answers)
+    result = {"project": "p", "synthetic": False, "overall": 0.8, "target": 1.0, "pass_rate": 0.8, "critical_failures": 0,
+              "cases": 10, "testers": 1, "reviewers": 1, "by_category": {}, "failures": [], "recommendations": [], "notes": [],
+              "next_steps": [], "report": "kaizeval-report.md", "target_met": False,
+              "decision_options": ["continue", "release", "reject"]}
+
+    def fake_run(path, **kwargs):
+        runs.append(kwargs["continue_"])
+        assert not (kwargs["continue_"] and kwargs["regenerate"])  # a continuation never regenerates the tests
+        return result
+
+    def fake_release(path, decision, **kwargs):
+        releases.append(decision)
+        return {"decision": decision, "candidate_status": "promoted" if decision == "approve" else "rejected"}
+
+    monkeypatch.setattr(project, "run_project", fake_run)
+    monkeypatch.setattr(project, "release", fake_release)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pending.pop(0))
+    assert cli.main(["run", "--regenerate"]) == cli.EXIT_QUALITY_GATE
+    assert runs == expected_runs and releases == expected_release and pending == []
+    out = capsys.readouterr().out
+    assert ("decision recorded: " in out) is bool(expected_release)
+    if not expected_release:
+        assert "kaizeval run --continue" in out and "kaizeval release approve" in out
+    # with --no-input, or when stdin is not a terminal, nothing is asked
+    runs.clear()
+    assert cli.main(["run", "--no-input"]) == cli.EXIT_QUALITY_GATE and runs == [False]

@@ -19,11 +19,12 @@ and they do not predict results on your agent.
 
 Reproduce it with `python scripts/real_model_check.py --model <your model>`; it writes a JSON
 file with everything reported below. The third run used `examples/llm_agent.py` and
-`examples/llm_agent.kaizeval.yaml`.
+`examples/llm_agent.kaizeval.yaml`. The fourth run continued the third.
 
-Across all runs the model server answered **589 requests, all successfully** (this includes the
-example agent's own calls in run 3). Of the 492 calls Kaizeval's gateway recorded, **one**
-returned output that failed schema validation; the automatic retry recovered it.
+Across runs 1 to 3 the model server answered **589 requests, all successfully** (this includes
+the example agent's own calls in run 3). Of the 492 calls Kaizeval's gateway recorded, **one**
+returned output that failed schema validation; the automatic retry recovered it. Run 4 added 75
+gateway calls, all valid.
 
 ## Run 1: every role once, then the pipeline (before fixes)
 
@@ -88,7 +89,8 @@ number of passages, temperature, whether sources are returned) are exposed with
 | 5 | A further prompt edit | rolled back: 4.8 points below the best version |
 | 6 | A further prompt edit | rolled back: 0.35 points below the best version |
 
-The loop stopped by its own rule, "the score did not change in 2 consecutive cycles", and left
+The loop stopped by its own rule, "the score did not change in 2 consecutive cycles" (the limit
+was 2 when this run was made; the default is now 3), and left
 the candidate waiting for a human decision with the remaining recommendations. Regression score
 of the best version: 74.0%. Correct refusals of out-of-scope questions went from 0% to 100%.
 
@@ -109,6 +111,42 @@ What this run taught, and what was changed:
 - A question about the document itself ("What does this document describe?") still slipped
   through; the tester prompt now forbids questions about the document rather than its facts.
 
+## Run 4: continuing the stopped loop of run 3
+
+Run 3 ended with a candidate waiting for a decision. This run takes the other branch of that
+decision, `kaizeval run --continue`, on the same project some hours later. In the meantime the
+example agent had been restarted without a state file, so it no longer had the candidate copy.
+
+The first attempt failed, and that was the finding of this run:
+
+| What the real model did | What was changed |
+|---|---|
+| **Rotating the holdout failed**: "the generator produced no new questions for a fresh holdout". A continuation needs a fresh sealed set, and on this small knowledge base the tester asked again what the dataset already contained, so nothing new and verifiable was left | The tester is now told what each passage was already asked and must ask about another fact; passages with the fewest questions are chosen first; a near-repeat of an existing question is dropped; and generation is retried on other passages. If it still fails, `kaizeval run` goes on without the final holdout check and says so |
+
+The second attempt, after that change:
+
+| Step | Result |
+|---|---|
+| Fresh holdout | Generated at the second internal attempt: 3 new sealed cases. The 3 retired holdout cases joined the regression set (11 → 14 cases) |
+| Candidate | The agent no longer knew it, so it was created again from the two changes run 3 had kept (the rewritten system prompt and `top_k: 3`). The baseline was untouched |
+| Measured again | Baseline 55.7%, candidate 74.7% on the 14 cases |
+| Cycle 7 | A further prompt edit, rolled back: 0.28 points below the best version |
+| Stop | The optimizer returned no further change, so the loop ended after one new cycle; the three-cycle rule was not what stopped it |
+| Paired A/B, regression | +18.9 points over 14 cases, 95% interval +3.9 to +38.8, verdict *improved* |
+| Sealed holdout (new) | +5.9 points over 3 cases, interval 0 to +17.7, verdict *inconclusive* |
+
+13 minutes, 75 model calls, no invalid output. The run ended, as it should, by offering the same
+three choices again: continue, release or reject.
+
+Two more things this run showed:
+
+- The same untouched baseline has now scored 53.1%, 60.8%, 62.4% and 64.9% on the same 11 cases,
+  and 55.7% on the larger set. The first four are the agent's own variation. The last one is a different test set, and the
+  run summary wrongly described that difference as variation too; the variation note now
+  compares only measurements over the same cases.
+- A continuation makes earlier scores incomparable when the holdout is rotated, because the
+  regression set grows. The report and the result now say so explicitly.
+
 ## What this does and does not establish
 
 Established, for this model and machine:
@@ -117,7 +155,9 @@ Established, for this model and machine:
   strict offline mode, without invalid structured output;
 - the improvement loop proposes sensible changes, keeps the ones that pass the gates, rolls back
   the ones that do not, and stops by the rule described in [PROJECT_MODE.md](PROJECT_MODE.md);
-- a model-backed agent can be improved by rewriting its system prompt on an isolated copy.
+- a model-backed agent can be improved by rewriting its system prompt on an isolated copy;
+- a stopped loop can be continued from its candidate after the agent was restarted, with a fresh
+  holdout generated by the real model.
 
 Not established:
 
@@ -129,7 +169,12 @@ Not established:
   different model for a real second opinion;
 - anything about a hosted provider with an API key. The code path is the same OpenAI-compatible
   one, with connected mode and `allow_public`, and it was not exercised against a paid service;
-- statistical confirmation of an improvement on a holdout of three cases. Use more cases.
+- statistical confirmation of an improvement on a holdout of three cases. Use more cases;
+- the three-unchanged-cycles stop with a real model. That rule is covered by the automated tests;
+  in run 3 the loop stopped at the earlier limit of two, and in run 4 the optimizer ran out of
+  proposals first;
+- a continuation after the owner changed the agent's own defaults. That path is covered by an
+  automated test with the sample agent only.
 
 ## Practical notes for local models
 

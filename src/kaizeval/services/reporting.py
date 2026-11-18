@@ -101,6 +101,9 @@ def optimization_report(db: Session, run: OptimizationRun) -> dict[str, Any]:
         "synthetic": run.synthetic, "banner": SYNTHETIC_BANNER if run.synthetic else None,
         "mode": run.mode, "status": run.status, "stop_reason": run.stop_reason, "error": run.error,
         "rounds": (run.state or {}).get("round", 0), "policy": run.policy,
+        "continuations": [{k: v for k, v in c.items() if k != "previous_holdout"}
+                          for c in (run.state or {}).get("continuations") or []],
+        "next_decision": _next_decision(run, candidate),
         "baseline": _run_block(baseline), "best": _run_block(best),
         "regression_comparison": comparison, "holdout": run.holdout,
         "remaining_recommendations": [
@@ -126,6 +129,21 @@ def optimization_report(db: Session, run: OptimizationRun) -> dict[str, Any]:
             "note": "Promotion to production requires an explicit approval and is never automatic."},
         "caveats": caveats,
     }
+
+
+def _next_decision(run: OptimizationRun, candidate: Candidate | None) -> dict[str, Any] | None:
+    """What the owner can do once the loop has stopped. None while it runs or after a release decision."""
+    if run.status not in ("completed", "cancelled") or candidate is None:
+        return None
+    if candidate.status == "awaiting_decision":
+        return {"options": ["continue", "release", "reject"],
+                "note": "Review this report and apply the recommendations you agree with. Then either continue the "
+                        "loop from this candidate, release the candidate as it is, or reject it."}
+    if candidate.status == "rejected" and not any(h.get("outcome") == "kept" for h in (run.state or {}).get("history", [])):
+        return {"options": ["continue"],
+                "note": "No change was kept, so there is nothing to release. Apply the recommendations to the agent, "
+                        "then continue the loop or start a new one."}
+    return None
 
 
 def _pct(value: float | None) -> str:
@@ -160,6 +178,15 @@ def to_markdown(report: dict[str, Any]) -> str:
     else:
         lines += [f"Status: **{report['status']}**. Stop reason: {report.get('stop_reason') or 'n/a'}. "
                   f"Rounds: {report.get('rounds')}.", ""]
+        for item in report.get("continuations") or []:
+            lines += [f"Continued after round {item.get('after_round')} (the loop had stopped: "
+                      f"{item.get('previous_stop_reason') or 'n/a'}, best {_pct(item.get('previous_best_overall'))}). "
+                      f"Measured again: baseline {_pct(item.get('baseline_overall'))}, candidate {_pct(item.get('best_overall'))}"
+                      f"{'; the baseline had been changed by its owner' if item.get('baseline_changed_by_owner') else ''}"
+                      f"{'; the regression set had grown to ' + str(item.get('regression_cases')) + ' cases, so these scores are not comparable with the earlier ones' if item.get('test_set_changed') else ''}.", ""]
+        decision = report.get("next_decision")
+        if decision:
+            lines += ["## Your decision", "", decision["note"], ""]
         table(report.get("baseline"), "Baseline A (regression set)")
         table(report.get("best"), "Best version (regression set)")
         comparison = report.get("regression_comparison")

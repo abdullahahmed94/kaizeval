@@ -33,12 +33,15 @@ def demo(live_api, sample_agent):
 
 
 def test_demo_runs_the_whole_journey_without_any_api_key(demo):
-    assert len(demo["lines"]) == 8 and "SYNTHETIC" in demo["lines"][1]
+    assert len(demo["lines"]) == 9 and "SYNTHETIC" in demo["lines"][1]
+    # it ends by handing the decision to the person: continue, or release
+    assert "Your decision" in demo["lines"][8] and "Continue improving" in demo["lines"][8]
     report = demo["report"]
     assert report["status"] == "completed" and report["synthetic"] is True and report["banner"]
     assert report["regression_comparison"]["overall"]["verdict"] == "improved"
     assert report["holdout"]["status"] == "completed" and report["holdout"]["overall"]["delta_percentage_points"] > 0
     assert report["candidate"]["status"] == "awaiting_decision"  # the demo never promotes
+    assert report["next_decision"]["options"] == ["continue", "release", "reject"]
 
 
 def test_ci_gate_exit_codes(demo, live_api, monkeypatch, capsys):

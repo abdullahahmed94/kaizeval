@@ -163,6 +163,7 @@ The table below is generated from the application (`python scripts/gen_api_refer
 | Method | Path (under `/api/v1`) | Minimum role | Purpose |
 |---|---|---|---|
 | `POST` | `/workspaces/{ws}/optimization-runs` | editor (owner for some options) | Start a bounded optimization of an isolated candidate. Refused when the connector cannot patch safely |
+| `POST` | `/workspaces/{ws}/optimization-runs/{run_id}/continue` | editor (owner for some options) | Keep improving from the candidate of a stopped run instead of releasing it. Both versions are measured again first |
 | `GET` | `/workspaces/{ws}/optimization-runs` | viewer | List optimizations |
 | `GET` | `/workspaces/{ws}/optimization-runs/{run_id}` | viewer | Get optimization |
 | `POST` | `/workspaces/{ws}/optimization-runs/{run_id}/stop` | editor | Stop optimization |
@@ -204,10 +205,10 @@ The table below is generated from the application (`python scripts/gen_api_refer
 
 | Key | Default | Meaning |
 |---|---|---|
-| `max_rounds` | `null` | Optional limit on the number of cycles. By default the loop ends on the target or on stagnation |
+| `max_rounds` | `null` | Optional limit on the number of cycles, counted from the start or from the last continuation. By default the loop ends on the target or on stagnation |
 | `target_score` | `null` | Stop when the best overall score reaches this value |
 | `min_improvement` | `0.005` | Gain over the best version needed to keep a change |
-| `stagnation_rounds` | `2` | Stop when this many cycles in a row leave the score unchanged (rolled back, rejected or repeated changes) |
+| `stagnation_rounds` | `3` | Stop when this many cycles in a row leave the score unchanged (rolled back, rejected or repeated changes) |
 | `max_category_regression` | `0.05` | Largest tolerated drop of any category against the baseline |
 | `allow_new_critical_failures` | `false` | A new critical failure rolls the change back |
 | `category_minimums` | `{}` | Required minimum mean per category |
@@ -216,6 +217,30 @@ The table below is generated from the application (`python scripts/gen_api_refer
 | `eval_config` | `{}` | Evaluation configuration for every round, for example `{"reviewers": 3, "testers": 4}` |
 | `run_holdout` | `true` | Validate the final candidate on the sealed holdout |
 | `limits` | `{}` | Same keys as above; applied to the whole optimization run |
+
+### Continuing a stopped run (`POST /optimization-runs/{run_id}/continue`)
+
+When a run has stopped (`completed` or `cancelled`), its report carries `next_decision.options`:
+`continue`, `release` and `reject` while the candidate awaits a decision, or only `continue` when
+no change was kept. Continuing reopens the same run and the same candidate:
+
+1. the candidate is brought in line with the agent as it is now (re-created if the agent lost it;
+   rebuilt as "current baseline plus the kept changes" if the baseline was changed by its owner);
+2. baseline A and candidate B are evaluated again on the regression set;
+3. the loop goes on with a fresh stagnation count, and ends with a new holdout validation.
+
+The optional body `{"policy": {...}}` may change `max_rounds`, `stagnation_rounds`,
+`target_score`, `min_improvement`, `limits` and `run_holdout`; anything else is refused with
+`INVALID_POLICY`. Each continuation is recorded in `state.continuations` and in the report.
+
+| Refusal | When |
+|---|---|
+| `NOT_CONTINUABLE` | The run is still in progress, or its candidate was released or rejected |
+| `HOLDOUT_SPENT` | The holdout informed the previous stop. Rotate it (`POST /datasets/{id}/holdout:rotate`), or continue with `run_holdout: false` |
+| `POLICY_BLOCKED` | An autonomous run, and autonomous optimization is now disabled for the workspace |
+
+An unused release approval is voided when a run is continued, so it cannot release a candidate
+that changed afterwards.
 
 ### Dataset generation (`POST /datasets:generate`)
 

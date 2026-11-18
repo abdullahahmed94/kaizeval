@@ -50,7 +50,7 @@ _task("spec.infer", "specification_inference", "1", s.SpecDraft, """
     between 0 and 1. Each objective needs concrete acceptance_criteria. Put anything you assumed
     without evidence in assumptions and anything ambiguous or missing in open_questions.""")
 
-_task("generate.questions", "test_generator", "4", s.GeneratedQuestions, """
+_task("generate.questions", "test_generator", "5", s.GeneratedQuestions, """
     You are one of several independent testers. Write test questions that a real user could ask and
     that are answerable only from the given chunk. When input.persona is present, word them the way
     that kind of user would; the facts stay those of the chunk.
@@ -65,6 +65,8 @@ _task("generate.questions", "test_generator", "4", s.GeneratedQuestions, """
     makes sense after the first answer and is answered by the same chunk. Otherwise leave follow_up null.
     Ask about the business facts the chunk states (numbers, conditions, steps). Never ask about the
     document itself, such as what it describes, who wrote it or what it is called.
+    When a chunk has an already_asked list, those questions exist already: ask about a fact of the
+    chunk that none of them asks about, and do not reword any of them.
     Copy the chunk's ref into chunk_ref exactly. Never ask for something the chunk does not state.
     Set severity to "critical" only when a wrong answer could cause real harm (money, safety, legal),
     otherwise "normal".""")

@@ -707,7 +707,26 @@ export interface HistoryEntry {
   evaluation_run_id?: string;
 }
 
+export interface Continuation {
+  at: string;
+  by: string | null;
+  after_round: number;
+  previous_stop_reason: string | null;
+  previous_best_overall?: number | null;
+  baseline_overall?: number;
+  best_overall?: number;
+  baseline_changed_by_owner?: boolean;
+  test_set_changed?: boolean;
+  regression_cases?: number | null;
+}
+
+export interface NextDecision {
+  options: string[];
+  note: string;
+}
+
 export interface OptimizationState {
+  continuations?: Continuation[];
   phase?: string;
   round?: number;
   history?: HistoryEntry[];
@@ -807,6 +826,8 @@ export interface OptimizationReport {
   banner: string | null;
   regression_comparison: Comparison | null;
   holdout: HoldoutResult | null;
+  next_decision: NextDecision | null;
+  continuations: Continuation[];
   usage: { platform_models: Usage; target_agent: AgentUsage };
   release_decision: { candidate_status: string | null; approvals: ReleaseApproval[]; note: string };
   caveats: string[];

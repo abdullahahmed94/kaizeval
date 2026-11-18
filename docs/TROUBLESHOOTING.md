@@ -39,6 +39,7 @@ report a problem.
 | Cases show `n/a` | No verified reference and no model judge for the main dimension | Use single or dual mode, or approve reference answers |
 | `HOLDOUT_SEALED` | Holdout items are hidden by design | Use the coverage summary; a reviewer can open them deliberately (audited, forces a rotation) |
 | `HOLDOUT_SPENT` | The holdout already informed a decision or was opened | Datasets → Rotate holdout |
+| Rotation fails with "no new questions for a fresh holdout" | After three attempts the tester model produced fewer than two new, verifiable questions (a small knowledge base that is already well covered) | Add knowledge documents, import approved questions, or run without the holdout check. `kaizeval run` falls back to that by itself and notes it |
 | `NOT_COMPARABLE` | The two runs used different datasets, splits or evaluation modes | Compare runs made with the same mode |
 | The same version scores differently in two runs | The agent is a model with a non-zero temperature | Set `evaluation.repeats` (project file) or `config.repeats` (API) to 2 or more; ignore differences within the reported variation |
 | A/B verdict is `inconclusive` | The difference is within noise for this number of cases | Add cases, or accept that the change has no demonstrated effect |
@@ -51,7 +52,10 @@ report a problem.
 | `POLICY_BLOCKED` | Autonomous mode is disabled for the workspace | An owner enables it in workspace settings, or use human-guided mode |
 | Run stays `review_required` | Human-guided mode waits for a decision on the proposed change | Approve or reject the pending change |
 | Every change is rolled back | No change passed the gates | Read the gate reasons in each round; relax `min_improvement` or `max_category_regression` only if that is justified |
-| `APPROVAL_REQUIRED` on promote | No unused approval exists for this candidate | An owner approves the release first |
+| `NOT_CONTINUABLE` | The run is still in progress, or its candidate was already released or rejected | Wait for the run to stop; after a release or a rejection start a new optimization |
+| `HOLDOUT_SPENT` when continuing | The sealed holdout informed the previous stop | Rotate the holdout, or continue without the final holdout check. `kaizeval run --continue` rotates it for you |
+| The score dropped right after continuing | A rotated holdout retires its cases into the regression set, so the set is larger | Compare only scores measured after the continuation; the report states the new number of cases |
+| `APPROVAL_REQUIRED` on promote | No unused approval exists for this candidate, or the run was continued after the approval | An owner approves the release (again) first |
 | `NO_SAFE_ISOLATION` | The baseline changed while a candidate was patched | The connector or agent is not isolating candidates. Stop and fix the agent's admin API |
 
 ## Running the server
