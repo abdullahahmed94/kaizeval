@@ -87,6 +87,9 @@ def test_black_box_agent_without_any_model(tmp_path, remote, sample_agent, capsy
     comparison = second["comparison_with_baseline"]
     assert comparison["baseline_run_id"] == first["run_id"] and comparison["n"] == first["cases"]
     assert comparison["delta_percentage_points"] == 0 and comparison["verdict"] == "inconclusive"
+    # two runs in a row with the same score: the loop says so and stops instead of going on blindly
+    assert first["stalled"] is False and second["stalled"] is True
+    assert any("Two runs in a row scored the same" in step for step in second["next_steps"])
     state = json.loads((tmp_path / ".kaizeval" / "project-state.json").read_text(encoding="utf-8"))
     assert state["baseline_run_id"] == first["run_id"] and state["last_run_id"] == second["run_id"]
 

@@ -45,7 +45,7 @@ class RolePolicyBody(BaseModel):
     model: str = Field(default="", max_length=200)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2000, ge=16, le=64000)
-    timeout_s: float = Field(default=120.0, gt=0, le=1800)
+    timeout_s: float = Field(default=300.0, gt=0, le=1800)
 
 
 def _store_secret(ctx: Ctx, name: str, value: str | None) -> str | None:

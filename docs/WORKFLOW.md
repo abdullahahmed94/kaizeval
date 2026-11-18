@@ -112,8 +112,8 @@ sequenceDiagram
 ```
 
 Gates: minimum improvement over the best version so far, no new critical failure, no category
-dropping more than the tolerance, optional per-category minimums and a latency limit. Stop rules:
-target score, maximum rounds, rounds without a kept change, model and agent budgets, cancellation.
+dropping more than the tolerance, optional per-category minimums and a latency limit. The loop stops when
+the target score is reached or when two cycles in a row leave the score unchanged; an optional round limit, model and agent budgets and cancellation can end it earlier. It always exits with the recommendations for what still fails.
 
 ## 4. Roles and decisions
 

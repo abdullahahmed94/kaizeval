@@ -48,6 +48,7 @@ with a compatible API.
 | `allow_egress` | Owner opt-in to send workspace content to a **public** destination. Ignored in offline mode |
 | `params.json_mode` | Send `response_format: {"type": "json_object"}` (default `true`; retried without it if the server answers 400) |
 | `params.max_retries` | Retries for transient failures and invalid output (default `2`) |
+| `params.preflight_timeout_s` | How long preflight waits for the first answer (default `300`; local models can need minutes to load) |
 | `params.max_concurrency` | Simultaneous requests to this provider (default `4`) |
 | `params.context_window` | Declared context size, reported by preflight |
 | `params.price_per_1k_input`, `params.price_per_1k_output` | Optional prices used to **estimate** cost |
@@ -126,6 +127,10 @@ Redirects are never followed and proxy environment variables are ignored.
    model name as `default_model`.
 3. Verify it, then set it as the `default` policy.
 4. Optionally route `evaluator_secondary` to a different model.
+
+A measured run of every role against a real local model, with the problems it revealed, is in
+[REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md). To repeat it with your model:
+`python scripts/real_model_check.py --base-url <url> --model <name>`.
 
 ## Adding a provider kind
 

@@ -91,7 +91,7 @@ def run_demo_flow(api: Api, *, agent_url: str, admin_token: str, email: str, pas
     api.call("PATCH", base, json={"settings": {"allow_autonomous_optimization": True}})
     opt = api.call("POST", f"{base}/optimization-runs", json={
         "agent_id": agent["id"], "dataset_id": dataset["id"], "mode": "autonomous",
-        "policy": {"max_rounds": 6, "stagnation_rounds": 3, "eval_mode": "single"}})
+        "policy": {"eval_mode": "single"}})
     api.wait_job(ws, opt["job"])
     report = api.call("GET", f"{base}/reports/{opt['optimization_run']['id']}")
     comparison = report.get("regression_comparison") or {}

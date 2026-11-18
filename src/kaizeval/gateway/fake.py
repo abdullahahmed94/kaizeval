@@ -177,7 +177,7 @@ def _root_cause(inputs: dict[str, Any]) -> dict[str, Any]:
 def _optimize(inputs: dict[str, Any]) -> dict[str, Any]:
     schema: dict[str, Any] = inputs.get("config_schema", {})
     current: dict[str, Any] = inputs.get("current_config", {})
-    rolled_back = [h.get("patch", {}) for h in inputs.get("history", []) if h.get("outcome") == "rolled_back"]
+    rolled_back = [h.get("patch", {}) for h in inputs.get("history", []) if h.get("outcome") in ("rolled_back", "rejected", "invalid", "repeated")]
     ranked = sorted((inputs.get("failure_summary", {}).get("by_category") or {}).items(), key=lambda kv: (-kv[1], kv[0]))
     for category, count in ranked:
         if not count:

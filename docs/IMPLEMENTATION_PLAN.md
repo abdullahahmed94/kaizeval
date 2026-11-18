@@ -1,6 +1,6 @@
 # Implementation plan and status
 
-Status of release 0.1.0 against the product blueprint. For per-criterion evidence see
+Status of release 0.2.0 against the product blueprint. For per-criterion evidence see
 [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md).
 
 ## Starting point
@@ -65,14 +65,16 @@ inconsistencies, resolved as follows:
 ## Open items
 
 Verified by CI: the test-suite on three Python versions, the console build, the wheel with the
-demo journey, and the Docker Compose stack starting on PostgreSQL. Still unverified: the full
-journey on PostgreSQL, the S3 storage backend, the network-isolated override, and any real model.
+demo journey, and the Docker Compose stack starting on PostgreSQL. Verified by hand against one real local model: every model-assisted step and two improvement
+loops ([REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md)). Still unverified: the full
+journey on PostgreSQL, the S3 storage backend, the network-isolated override, other models and
+hosted providers.
 Not implemented: see the list at the end of [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md).
 
 ## Next milestones
 
 1. **Validate what is unverified**: a PostgreSQL run of the
-   full test-suite; S3 storage tests; a documented run against a real local model.
+   full test-suite; S3 storage tests; runs against more models and one hosted provider.
 2. **Trust in scores**: judge calibration against a human-labelled sample; knowledge-base health
    report (contradictions, duplicates, ambiguous passages).
 3. **Reach**: connectors for common agent frameworks (invoke + traces first); service tokens for

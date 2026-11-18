@@ -683,7 +683,7 @@ export interface HoldoutResult {
 // --- optimization -----------------------------------------------------------------------
 
 export interface OptimizationPolicy {
-  max_rounds: number;
+  max_rounds: number | null;
   target_score: number | null;
   min_improvement: number;
   stagnation_rounds: number;

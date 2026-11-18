@@ -10,7 +10,7 @@ jobs:
   kaizeval:
     runs-on: ubuntu-latest   # use a self-hosted runner if Kaizeval is on a private network
     steps:
-      - uses: abdullahahmed94/kaizeval@v0.1.0
+      - uses: abdullahahmed94/kaizeval@v0.2.0
         with:
           url: ${{ vars.KAIZEVAL_URL }}
           email: ${{ secrets.KAIZEVAL_EMAIL }}

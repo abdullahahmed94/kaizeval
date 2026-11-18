@@ -79,6 +79,8 @@ class Judgment(BaseModel):
     verdict: Literal["pass", "fail", "uncertain"] = "uncertain"
     confidence: float = 0.5
     rationale: str = ""
+    # Required evidence when "abstention" is scored above 0.5: the sentence of the response that declines.
+    refusal_quote: str = ""
 
     @field_validator("scores")
     @classmethod

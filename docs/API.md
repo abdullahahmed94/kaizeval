@@ -204,10 +204,10 @@ The table below is generated from the application (`python scripts/gen_api_refer
 
 | Key | Default | Meaning |
 |---|---|---|
-| `max_rounds` | `5` | Hard cap on proposed changes |
+| `max_rounds` | `null` | Optional limit on the number of cycles. By default the loop ends on the target or on stagnation |
 | `target_score` | `null` | Stop when the best overall score reaches this value |
 | `min_improvement` | `0.005` | Gain over the best version needed to keep a change |
-| `stagnation_rounds` | `2` | Stop after this many rounds in a row without a kept change |
+| `stagnation_rounds` | `2` | Stop when this many cycles in a row leave the score unchanged (rolled back, rejected or repeated changes) |
 | `max_category_regression` | `0.05` | Largest tolerated drop of any category against the baseline |
 | `allow_new_critical_failures` | `false` | A new critical failure rolls the change back |
 | `category_minimums` | `{}` | Required minimum mean per category |

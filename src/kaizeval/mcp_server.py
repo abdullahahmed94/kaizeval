@@ -27,6 +27,8 @@ Typical loop:
    `evaluate_agent` again. `comparison_with_baseline` tells you whether the change really helped
    ("improved"), hurt ("regressed") or made no demonstrable difference ("inconclusive").
 4. Repeat until `target_met` is true, then call `evaluate_agent` once with final_holdout_check=true.
+   Stop as well when `stalled` is true (two runs in a row with the same score): report what still
+   fails to the user instead of trying further changes blindly.
 5. Never release on the user's behalf: ask the user, then call `release_candidate` with their decision.
 
 Results flagged `synthetic: true` come from the built-in fake model and are not real evaluations.

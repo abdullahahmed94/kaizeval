@@ -120,8 +120,13 @@ these, so no code is needed to evaluate them.
 Capabilities: `invoke`, `inspect`, `create_candidate`, `apply_patch`, `restore_candidate`, `promote`.
 Config: `base_url`, optional `timeout_s`, `cost_per_call`; the credential is the admin bearer token.
 
+The quickest way to support it is `kaizeval.agentkit.CandidateStore`, which adds every endpoint
+below to a FastAPI agent and lets you declare which settings may be changed (see
+[PROJECT_MODE.md](PROJECT_MODE.md#making-your-own-agent-automatic)). Setting types: `boolean`,
+`integer`, `number` and `string` (for example a system prompt, with `max_length`).
+
 An agent supports this adapter by exposing the following endpoints. The bundled sample agent
-(`kaizeval/sample_agent/app.py`) is a complete reference implementation of about 300 lines.
+(`kaizeval/sample_agent/app.py`) and the model-backed `examples/llm_agent.py` both use the kit.
 
 | Endpoint | Purpose |
 |---|---|

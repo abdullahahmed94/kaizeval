@@ -50,18 +50,33 @@ _task("spec.infer", "specification_inference", "1", s.SpecDraft, """
     between 0 and 1. Each objective needs concrete acceptance_criteria. Put anything you assumed
     without evidence in assumptions and anything ambiguous or missing in open_questions.""")
 
-_task("generate.questions", "test_generator", "2", s.GeneratedQuestions, """
+_task("generate.questions", "test_generator", "4", s.GeneratedQuestions, """
     You are one of several independent testers. Write test questions that a real user could ask and
-    that are answerable only from the given chunk. When input.persona is present, write them the way
-    that kind of user would: the wording and difficulty should reflect the persona while the facts
-    stay those of the chunk. Produce up to input.per_chunk questions for every chunk in input.chunks, using the
-    categories in input.categories: "knowledge" (direct factual question), "citation" (the answer must
-    name its source), "edge_case" (a paraphrased, terse or slightly misspelled version of a realistic
-    question). When input.include_multi_turn is true, also add for some chunks one question with
-    category "multi_turn" and a follow_up question that depends on the first answer and is also
-    answerable from the same chunk. Copy the chunk's ref into chunk_ref exactly. Do not write a
-    question whose answer is not stated in its chunk. Set severity to "critical" only when a wrong
-    answer could cause real harm (money, safety, legal).""")
+    that are answerable only from the given chunk. When input.persona is present, word them the way
+    that kind of user would; the facts stay those of the chunk.
+    For EACH chunk in input.chunks write exactly input.per_chunk questions, never more. Each question
+    must ask about a DIFFERENT fact of its chunk. Never write two questions that ask the same thing in
+    different words. Give each question one category from input.categories, using different
+    categories within a chunk when you can: "knowledge" is a direct factual question; "citation" is a
+    factual question in which the user also asks which document or section says so; "edge_case" is a
+    terse, informal or slightly misspelled question about a fact.
+    Only when input.include_multi_turn is true: for at most one chunk in three, add ONE extra question
+    with category "multi_turn" and a follow_up, where follow_up is a short second question that only
+    makes sense after the first answer and is answered by the same chunk. Otherwise leave follow_up null.
+    Ask about the business facts the chunk states (numbers, conditions, steps). Never ask about the
+    document itself, such as what it describes, who wrote it or what it is called.
+    Copy the chunk's ref into chunk_ref exactly. Never ask for something the chunk does not state.
+    Set severity to "critical" only when a wrong answer could cause real harm (money, safety, legal),
+    otherwise "normal".""")
+
+_task("generate.unanswerable", "test_generator", "2", s.UnanswerableQuestions, """
+    The knowledge base covers ONLY the topics in input.topics. Write input.n realistic questions that
+    a user of this business might ask but whose subject is NOT among those topics at all, so a
+    correct agent must say it does not know. Good subjects: other departments, staff or company
+    internals, personal data about other people, competitors, payment or account problems,
+    predictions, legal or medical advice, products or services that are not mentioned.
+    A question that any of the listed topics could plausibly answer is WRONG; do not write it.
+    Explain briefly in reason why each question is out of scope.""")
 
 _task("generate.unanswerable", "test_generator", "1", s.UnanswerableQuestions, """
     The knowledge base covers only the topics in input.topics. Write input.n realistic user questions
@@ -88,15 +103,30 @@ _JUDGE = """
     admissible ground truth. If the reference is marked unverified, judge against the evidence
     instead. Give verdict "pass", "fail" or "uncertain", a confidence between 0 and 1, and a short
     rationale that points to the specific evidence or missing content. Do not reward fluent text
-    that is not supported by the evidence."""
-_task("judge.primary", "evaluator_primary", "1", s.Judgment, _JUDGE)
-_task("judge.secondary", "evaluator_secondary", "1", s.Judgment, _JUDGE)
+    that is not supported by the evidence.
+    Special rule for the dimension "abstention": it is about what the RESPONSE says, not about the
+    evidence. Score it 1 only if the response itself explicitly says that it does not know, cannot
+    answer, or that the information is not available. A response that gives some other information
+    instead, even true or unrelated information, did NOT abstain and scores 0. When you score
+    abstention above 0.5 you must copy into refusal_quote the exact sentence of the response that
+    declines; otherwise leave refusal_quote empty."""
+_SCEPTIC = _JUDGE + """
+    You are the sceptical reviewer of a panel. Before scoring, actively look for anything in the
+    response that is missing, unsupported or contradicted by the evidence, and for facts of the
+    reference that the response leaves out. Score from what you find, not from how fluent the
+    response sounds."""
+_task("judge.primary", "evaluator_primary", "2", s.Judgment, _JUDGE)
+# The second reviewer gets a deliberately different brief, so that two reviewers on the same model
+# are not simply two copies of one opinion.
+_task("judge.secondary", "evaluator_secondary", "2", s.Judgment, _SCEPTIC)
 
 _task("arbiter", "arbiter", "1", s.ArbiterDecision, """
     Two independent evaluators scored the same response and disagreed, or the case is critical.
     input.judgments holds both. Using input.evidence and input.expected as ground truth, decide the
     correct score for each dimension in input.dimensions and a verdict. If the evidence is not
-    sufficient to decide, set needs_human_review=true and verdict="uncertain" instead of guessing.""")
+    sufficient to decide, set needs_human_review=true and verdict="uncertain" instead of guessing.
+    For the dimension "abstention", score 1 only if the response itself explicitly declines, and then
+    copy the declining sentence into refusal_quote; a response that says something else scores 0.""")
 
 _task("root_cause", "root_cause", "1", s.RootCauses, """
     For each failed test in input.failures, propose the most plausible cause. category must be one
@@ -104,13 +134,24 @@ _task("root_cause", "root_cause", "1", s.RootCauses, """
     observed and what is only suspected. confidence must reflect how directly the signals support
     the hypothesis; use a low value when the cause cannot be observed from outside the agent.""")
 
-_task("optimize", "optimizer", "1", s.OptimizerProposal, """
-    Propose ONE small change to the candidate agent configuration that is most likely to fix the
-    failures summarised in input.failure_summary without causing regressions. You may only set keys
-    that exist in input.config_schema and must respect each key's type and range. input.history lists
-    earlier patches and whether they were kept or rolled back; do not repeat a rolled-back patch.
-    If no safe change is likely to help, return an empty patch and explain why in rationale.""")
-
+_task("optimize", "optimizer", "2", s.OptimizerProposal, """
+    You improve an AI agent by changing ONE of its settings. Work in this order.
+    1. Read input.failure_summary: by_category counts the failures of each kind and examples shows
+       what went wrong. Pick the kind with the most failures that has not been fixed yet.
+    2. In input.config_schema find the setting whose "addresses" list contains that kind (use
+       "description" to understand what the setting does). input.current_config has its value now.
+    3. Propose a new value for that ONE setting in patch, as {"<setting name>": <new value>}:
+       - boolean: switch it on when it enables the missing behaviour;
+       - number: move it toward "suggested" if given, inside "min" and "max";
+       - text (for example a system prompt): write the COMPLETE new text. Keep the useful parts of the
+         current text and add short, explicit rules that directly prevent the observed failures, for
+         example "Answer only from the provided documents.", "Name the source document for every
+         fact.", "If the documents do not contain the answer, say you do not know and do not guess.",
+         "Include every number and condition the documents give." Stay under max_length.
+    4. input.history lists earlier patches and their outcome. Never propose again a patch that was
+       rolled back, rejected, repeated or invalid; choose a different setting or a different text.
+    Use only setting names that exist in input.config_schema. If no setting can help, return an empty
+    patch and say why in rationale. Keep rationale to one or two sentences.""")
 
 RUBRIC = {
     "correctness": "The response states the facts in the expected answer accurately and completely.",

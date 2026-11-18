@@ -1,11 +1,11 @@
-# Acceptance status for release 0.1.0
+# Acceptance status for release 0.2.0
 
 This page states, criterion by criterion, what is demonstrated by automated tests, what was only
 checked by hand, and what is not done. Run the evidence yourself:
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 99 tests; strict offline; fails on any non-loopback connection
+pytest                 # 120 tests; strict offline; fails on any non-loopback connection
 kaizeval demo          # the whole journey on the bundled sample agent
 ```
 
@@ -31,7 +31,7 @@ That needs a real model that you configure.
 | 2 | PDF/DOCX/TXT/MD ingestion with traceable evidence and source citations | Done | `tests/test_documents.py` (file, version, SHA-256, page or section, character offsets, verbatim quote) |
 | 3 | Requirements or inferred specification with Review / Edit / Skip and version history | Done | `test_specification_review_edit_skip_and_versions`, `test_requirements_work_without_a_model_but_inference_does_not` |
 | 4 | Tagged cases, coverage, regression/holdout split with enforced isolation | Done | `test_dataset_generation_split_and_coverage`, `test_holdout_is_sealed`, `test_holdout_stays_sealed_from_the_optimizer` |
-| 5 | A real configured model is routed through the gateway; a clearly flagged mock runs CI without secrets | Partly | The OpenAI-compatible path is tested end to end against a **local mock server** (`tests/test_gateway.py`, `test_real_model_route_is_not_flagged_synthetic`). It was **not** run against a real model server on the release machine |
+| 5 | A real configured model is routed through the gateway; a clearly flagged mock runs CI without secrets | Done for one local model | Automated: the OpenAI-compatible path against a local mock server (`tests/test_gateway.py`). Manual: every role, test generation, three review modes and two optimization loops against `qwen2.5:7b` on Ollama, recorded in [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md). No hosted provider was exercised |
 | 6 | Single and Dual + Arbiter evaluation; disagreement, uncertainty and evidence stay visible | Done | `test_single_evaluation_with_evidence_and_separate_costs`, `test_dual_judges_are_independent_and_arbitrated` |
 | 7 | Recommendations with reasons; read-only HTTP agents are not offered auto-patching | Done | `test_findings_and_recommendations`, `test_black_box_agent_gets_recommendations_only` |
 | 8 | Immutable A, isolated B, patch only B, paired A/B, full regression, rollback | Done | `test_optimization_improves_candidate_and_leaves_baseline_untouched`, `test_every_round_reruns_full_regression_and_is_paired`, `test_failing_gates_roll_the_candidate_back` |
@@ -73,10 +73,10 @@ Still unverified:
   SQLAlchemy with no dialect-specific SQL.
 - **S3 / MinIO storage** is implemented (`storage.S3Storage`) and has no test.
 - **The network-isolated Compose override** is provided and unvalidated.
-- **A real model** (for example a local Ollama or vLLM server) was never called. Preflight,
-  routing, retries, JSON validation and metering are covered against a mock server that speaks
-  the same protocol; the usefulness of any particular model as a tester, reviewer or optimizer is
-  not established by this project.
+- **Other models and hosted providers.** One local model was exercised end to end (see
+  [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md)). The behaviour of any other model as a
+  tester, reviewer or optimizer, and the connected mode with a paid API key, are not established
+  by this project.
 
 ## Deliberate differences from the original blueprint
 
@@ -94,8 +94,8 @@ Still unverified:
 - Vendor-specific connectors (for example Salesforce, LangChain/LangGraph wrappers).
 - SQL and API ground-truth providers (typed placeholders only).
 - The `traces` capability: defined in the contract, implemented by no bundled adapter.
-- Language and dialect variants with the fake provider (it cannot translate). The feature works
-  only with a real model and is untested with one.
+- Reliable dialect variants. Variants need a real model; with the model tested, Egyptian Arabic
+  output was poor, so broken variants are filtered out and the rest should be reviewed by a speaker.
 - Calibration of judges against human labels.
 - Online experiments on live traffic, scheduled re-runs and monitoring.
 - Login rate limiting, multi-factor authentication, password reset, token revocation.

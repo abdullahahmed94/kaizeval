@@ -5,7 +5,8 @@ Rules enforced here:
   is re-checked after every patch;
 * the whole regression set is re-run after each change and compared pairwise with the baseline;
 * a change is kept only if it passes every gate, otherwise the candidate is restored;
-* the loop is bounded by rounds, model/agent budgets, stagnation and cancellation;
+* the loop runs until the target is reached or until two cycles in a row leave the score unchanged;
+  optional round and budget limits, and cancellation, can end it earlier;
 * this module reads regression data only. Final validation is delegated to ``services.holdout``,
   which returns aggregates; holdout items never enter the optimizer's inputs;
 * nothing here promotes to production. Promotion is a separate, explicitly approved action.
@@ -38,14 +39,19 @@ from ..models import (
 )
 from . import holdout as holdout_service
 from .datasets import regression_cases, split_counts
-from .diagnostics import diagnose
+from .diagnostics import diagnose, recommend
 from .evaluation import create_run, execute_run
 from .stats import compare_runs
 
+# Runaway guard only. Normal runs end long before it, on the target or on stagnation.
+HARD_ROUND_LIMIT = 200
+
 DEFAULT_POLICY: dict[str, Any] = {
-    "max_rounds": 5,
+    # No fixed number of rounds by default: the loop ends on the target or on stagnation (below).
+    "max_rounds": None,
     "target_score": None,
     "min_improvement": 0.005,
+    # Stop when this many cycles in a row end with the same score as before them.
     "stagnation_rounds": 2,
     "max_category_regression": 0.05,
     "allow_new_critical_failures": False,
@@ -224,6 +230,10 @@ def _finalize(db: Session, run: OptimizationRun, state: dict[str, Any], reason: 
         run.holdout = {"status": "skipped", "reason": "holdout validation was disabled for this run"}
     if candidate is not None:
         candidate.status = "awaiting_decision" if kept else "rejected"
+    # Always leave with recommendations for what still fails in the best version.
+    best_run = db.get(EvaluationRun, run.best_run_id) if run.best_run_id else None
+    if best_run is not None and best_run.status == "completed":
+        recommend(db, best_run)
     state["phase"] = "done"
     run.state, run.status, run.finished_at = dict(state), "completed", utcnow()
     audit.record(db, workspace_id=run.workspace_id, user_id=run.created_by, action="optimization.completed",
@@ -292,11 +302,12 @@ def advance(db: Session, run_id: str, ctx: JobContext | None = None) -> Optimiza
                 if target is not None and state["best_overall"] >= float(target):
                     _finalize(db, run, state, "target score reached", ctx)
                     return run
-                if state["round"] >= int(policy["max_rounds"]):
-                    _finalize(db, run, state, "maximum number of rounds reached", ctx)
-                    return run
                 if state["stagnation"] >= int(policy["stagnation_rounds"]):
-                    _finalize(db, run, state, f"no improvement in {state['stagnation']} consecutive round(s)", ctx)
+                    _finalize(db, run, state, f"the score did not change in {state['stagnation']} consecutive cycles", ctx)
+                    return run
+                max_rounds = policy.get("max_rounds")
+                if state["round"] >= int(max_rounds if max_rounds is not None else HARD_ROUND_LIMIT):
+                    _finalize(db, run, state, "maximum number of rounds reached", ctx)
                     return run
                 budget = _budget_reason(db, run)
                 if budget:
@@ -320,6 +331,14 @@ def advance(db: Session, run_id: str, ctx: JobContext | None = None) -> Optimiza
                     _finalize(db, run, state, "the optimizer found no further safe change", ctx)
                     return run
                 state["round"] += 1
+                if any(h["patch"] == proposal.patch and h["outcome"] in ("rolled_back", "rejected", "invalid")
+                       for h in state["history"]):
+                    # Proposing a change that already failed is a cycle without progress; do not pay to re-test it.
+                    state["history"].append({"round": state["round"], "patch": proposal.patch, "outcome": "repeated",
+                                             "reasons": ["this change was already tried and not kept"]})
+                    state["stagnation"] += 1
+                    _save(db, run, state)
+                    continue
                 try:
                     validate_patch(proposal.patch, schema)
                 except OptimizationError as exc:

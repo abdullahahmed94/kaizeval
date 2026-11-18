@@ -54,7 +54,7 @@ def closure() -> dict[str, metadata.Distribution]:
 
 def main() -> None:
     rows, flagged = [], []
-    for key, dist in sorted(closure().items()):
+    for _key, dist in sorted(closure().items()):
         lic = license_of(dist)
         rows.append(f"| {dist.metadata['Name']} | {dist.version} | {lic} |")
         if COPYLEFT.search(lic) and "LGPL" not in lic.upper():

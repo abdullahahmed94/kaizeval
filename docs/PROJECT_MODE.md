@@ -5,7 +5,7 @@ You describe your agent in `kaizeval.yaml`; `kaizeval run` does the rest and can
 often as you like.
 
 ```bash
-pip install kaizeval-0.1.0-py3-none-any.whl
+pip install kaizeval-0.2.0-py3-none-any.whl
 kaizeval init          # writes kaizeval.yaml
 kaizeval run           # connect, write tests, test, review, recommend, compare
 ```
@@ -60,16 +60,56 @@ Exit code `0` means the target score was reached, `1` that it was not, `2` an er
 
 `evaluation.target` is the score to reach on the regression set (default `1.0`, that is 100%).
 
-**100% is a target, not a promise.** Some agents cannot reach it, and a loop that never stops is
-not safe to run. The loop therefore also ends when nothing improves any more, when the round or
-budget limits are hit, or when you cancel it, and it always reports why it stopped.
+**When the loop stops.** It keeps going as long as it makes progress. It stops when:
 
-How the loop runs depends on what your agent allows:
+1. the target is reached; or
+2. **two cycles in a row leave the score unchanged.** A change that is rolled back, rejected or
+   already tried counts as an unchanged cycle. The loop then exits with the recommendations for
+   what still fails and a report.
 
-| Your agent | Who applies the fixes | How the loop runs |
+There is no fixed number of rounds by default. You can still add `optimize.max_rounds` or budgets
+(`evaluation.max_model_calls`, `evaluation.max_agent_calls`) as extra limits, and you can cancel a
+run at any time. Because a change is kept only when it really improves the score, the loop always
+terminates. 100% is the goal, not a promise: when an agent cannot get there, you get the best
+version found and an explanation of what is left.
+
+**Who applies the fixes.** Kaizeval can always *measure* an agent, but it can only *change* an
+agent that gives it a safe way to do so. That is the one thing that differs between agents:
+
+| Your agent | What Kaizeval can do | How the loop runs |
 |---|---|---|
-| Any HTTP agent (black box) | You, or your coding assistant | `kaizeval run` → apply the recommendations → `kaizeval run` again. Each run shows the paired A/B against the baseline. When the target is met, run `kaizeval run --holdout` once for the independent check |
-| Implements the [candidate protocol](CONNECTOR_SDK.md) (`candidate_protocol: true`) | Kaizeval, on an isolated copy | With `optimize.enabled: true` the loop is automatic: one allowlisted change per round on candidate B, the whole regression set re-tested, paired A/B against baseline A, kept only if every gate passes, then validated on the sealed holdout |
+| **A plain HTTP agent.** It only exposes a chat endpoint. Kaizeval can send questions and read answers, and has no access to its prompt, settings or code | Test it, score it, explain the failures, and write recommendations such as "add a rule to decline when the documents are silent" | **You close the loop**: you (or your coding assistant, which has your code open) apply the recommendations, restart the agent and run `kaizeval run` again. Every run is compared with the first one case by case, and two runs in a row with the same score are reported as `stalled`. When the target is met, `kaizeval run --holdout` does the final independent check |
+| **An agent with the candidate protocol.** It also exposes a few admin endpoints that let Kaizeval create an isolated copy of its settings and change that copy | Everything above, plus try changes itself, on the copy only | **Kaizeval closes the loop** (`optimize.enabled: true`): one change per cycle on candidate B, the whole regression set re-tested, paired A/B against baseline A, kept only if every gate passes, then validated on the sealed holdout |
+
+### Making your own agent automatic
+
+You do not have to write the admin endpoints yourself. `kaizeval.agentkit` adds them to any
+FastAPI agent in a few lines, and you decide which settings may be changed (for example the
+system prompt, the number of retrieved passages, the temperature):
+
+```python
+from fastapi import FastAPI
+from kaizeval.agentkit import CandidateStore
+
+store = CandidateStore(
+    defaults={"system_prompt": "You are a support assistant.", "top_k": 3},
+    hints={"system_prompt": {"addresses": ["instruction_prompt", "citation"], "max_length": 2000},
+           "top_k": {"min": 1, "max": 8, "addresses": ["retrieval_grounding"]}},
+    state_file="agent-candidates.json",
+)
+app = FastAPI()
+app.include_router(store.router(admin_token="choose-a-secret"))   # the candidate protocol
+
+@app.post("/chat")
+def chat(body: dict):
+    version, settings = store.settings(body.get("version"))       # baseline, a candidate, or production
+    answer = my_agent(body["message"], **settings)
+    return {"answer": answer, "citations": [], "version": version, "config_digest": store.digest(version)}
+```
+
+Your baseline settings can never be modified through these endpoints, candidates are separate
+copies, and promotion only moves a pointer. `examples/llm_agent.py` is a complete model-backed
+agent built this way, with `examples/llm_agent.kaizeval.yaml` to test and improve it.
 
 In both cases **the release decision is yours**. After an automatic optimization the candidate
 waits for you:
@@ -81,9 +121,6 @@ kaizeval release reject     # keep baseline A
 
 On an interactive terminal `kaizeval run` asks the question directly. In scripts and coding
 assistants (`--no-input`, or `--json`) it never asks and never promotes.
-
-A/B for a black-box agent that you deploy twice (old and new version on two URLs) works the same
-way: point `agent.url` at the new version and run again; the comparison is against the baseline run.
 
 ## `kaizeval.yaml` reference
 
@@ -110,10 +147,12 @@ way: point `agent.url` at the new version and run again; the comparison is again
 | `tests.import` | `[]` | Your own approved questions (CSV or JSON Lines) |
 | `evaluation.reviewers` | `2` | Independent reviewer agents per answer, 0 to 7 (0 = rules only) |
 | `evaluation.target` | `1.0` | Regression score to reach |
-| `evaluation.require_citations` | `true` | Score whether answers cite the right source |
+| `evaluation.require_citations` | `true` | Score whether answers cite the right source (a returned citation list, or the document named in the answer) |
+| `evaluation.repeats` | `1` | Ask every question this many times and average the scores. Use 2 or more for agents whose answers vary between runs |
 | `evaluation.max_agent_calls`, `evaluation.max_model_calls` | none | Budgets |
 | `optimize.enabled` | `false` | Automatic improvement of an isolated candidate |
-| `optimize.max_rounds`, `optimize.stagnation_rounds` | `10`, `3` | Safety caps for the loop |
+| `optimize.stagnation_rounds` | `2` | Stop when this many cycles in a row leave the score unchanged |
+| `optimize.max_rounds` | none | Optional extra limit on the number of cycles |
 
 To mix two models as reviewers, assign a different model to the `evaluator_secondary` role in the
 console (Models → role routing): reviewers alternate between the two evaluator roles.
@@ -126,10 +165,10 @@ Any assistant that can run a terminal command can use Kaizeval as it is:
 kaizeval run --json --no-input
 ```
 
-prints one JSON object with `overall`, `target_met`, `failures`, `recommendations`,
+prints one JSON object with `overall`, `target_met`, `stalled`, `failures`, `recommendations`,
 `comparison_with_baseline` and `next_steps`, while progress goes to stderr. A typical instruction
 to give your assistant: *"Run `kaizeval run --json --no-input`, apply the recommendations to the
-agent, restart it and run again until `target_met` is true. Do not release anything without
+agent, restart it and run again until `target_met` or `stalled` is true. Do not release anything without
 asking me."*
 
 For assistants that support the Model Context Protocol, Kaizeval ships an MCP server:

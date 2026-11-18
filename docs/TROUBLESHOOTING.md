@@ -12,6 +12,7 @@ report a problem.
 | `EGRESS_BLOCKED` when adding or calling a provider | The destination is not allowed in this mode | Offline: use a local address or add the host to `KAIZEVAL_EGRESS_ALLOWLIST`. Connected: tick "allow public endpoint" on the provider. An instance started with `KAIZEVAL_OFFLINE=true` can never reach public hosts |
 | `INSTANCE_OFFLINE` | You tried to create a connected workspace on an offline instance | Restart with `KAIZEVAL_OFFLINE=false` if that is really intended |
 | Preflight: `connectivity` fails with `CONNECTION` | The model server is not reachable from the Kaizeval process | Check the URL and port. Inside Docker, `localhost` is the container itself: use the service name or the host's address |
+| Preflight or the first call fails with `TIMEOUT` | A local model server loads the model on its first request, which can take minutes | Run Verify again once the model is loaded, keep it loaded (`OLLAMA_KEEP_ALIVE` for Ollama), or raise `params.preflight_timeout_s` and the role timeout |
 | Preflight: `structured_output` fails | The model did not return valid JSON for the schema | Use a model that follows JSON instructions, or a server that supports JSON mode |
 | `INVALID_OUTPUT` during a run | The model kept returning invalid JSON after retries | Same as above; raise `params.max_retries` if failures are occasional |
 | `BUDGET_EXCEEDED` | A call, token, cost or agent-call limit was reached | The run keeps its partial results. Raise the limit and start again |
@@ -39,6 +40,7 @@ report a problem.
 | `HOLDOUT_SEALED` | Holdout items are hidden by design | Use the coverage summary; a reviewer can open them deliberately (audited, forces a rotation) |
 | `HOLDOUT_SPENT` | The holdout already informed a decision or was opened | Datasets → Rotate holdout |
 | `NOT_COMPARABLE` | The two runs used different datasets, splits or evaluation modes | Compare runs made with the same mode |
+| The same version scores differently in two runs | The agent is a model with a non-zero temperature | Set `evaluation.repeats` (project file) or `config.repeats` (API) to 2 or more; ignore differences within the reported variation |
 | A/B verdict is `inconclusive` | The difference is within noise for this number of cases | Add cases, or accept that the change has no demonstrated effect |
 | Everything is labelled SYNTHETIC | The fake provider is routed to that role | Configure and verify a real model |
 

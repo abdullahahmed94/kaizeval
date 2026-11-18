@@ -57,7 +57,7 @@ function StartForm() {
   const [agentId, setAgentId] = useState("");
   const [datasetId, setDatasetId] = useState("");
   const [mode, setMode] = useState("human_guided");
-  const [maxRounds, setMaxRounds] = useState("5");
+  const [maxRounds, setMaxRounds] = useState("");
   const [targetScore, setTargetScore] = useState("");
   const [stagnation, setStagnation] = useState("2");
   const [minImprovement, setMinImprovement] = useState("0.5");
@@ -96,7 +96,7 @@ function StartForm() {
     const target = parseOptionalNumber(targetScore);
     // The API expresses scores and tolerances as fractions (0..1); the form uses percent and percentage points.
     const policy: Dict = {
-      max_rounds: Number(maxRounds),
+      max_rounds: parseOptionalNumber(maxRounds),
       target_score: target === null ? null : target / 100,
       stagnation_rounds: Number(stagnation),
       min_improvement: Number(minImprovement) / 100,
@@ -155,13 +155,13 @@ function StartForm() {
               ))}
             </select>
           </Field>
-          <Field label="Max rounds" hint="One proposed change per round.">
-            <input type="number" value={maxRounds} min={1} max={50} step={1} onChange={(event) => setMaxRounds(event.target.value)} required />
+          <Field label="Max cycles (optional)" hint="One proposed change per cycle. Leave empty to run until the target is reached or the score stops changing.">
+            <input type="number" value={maxRounds} min={1} max={200} step={1} onChange={(event) => setMaxRounds(event.target.value)} />
           </Field>
           <Field label="Target score (%) (optional)" hint="Stop as soon as the regression score reaches this value.">
             <input type="number" value={targetScore} min={0} max={100} step="any" onChange={(event) => setTargetScore(event.target.value)} />
           </Field>
-          <Field label="Stagnation rounds" hint="Stop after this many rounds in a row without a kept change.">
+          <Field label="Stop after unchanged cycles" hint="Stop when this many cycles in a row leave the score unchanged, then report the remaining recommendations.">
             <input type="number" value={stagnation} min={1} max={50} step={1} onChange={(event) => setStagnation(event.target.value)} required />
           </Field>
           <Field label="Minimum improvement (pp)" hint="A change is kept only if it beats the best version so far by at least this much.">

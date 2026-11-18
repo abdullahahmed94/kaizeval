@@ -346,7 +346,9 @@ class Gateway:
         if ok:
             nonce = uuid.uuid4().hex[:8]
             temp_policy = ModelRolePolicy(workspace_id=self.workspace_id, role="preflight", provider_id=provider.id,
-                                          model=provider.default_model, temperature=0.0, max_tokens=200, timeout_s=30.0)
+                                          model=provider.default_model, temperature=0.0, max_tokens=200,
+                                          # a local model can need minutes to load into memory on its first call
+                                          timeout_s=float((provider.params or {}).get("preflight_timeout_s", 300)))
             task = TASKS["preflight"]
             try:
                 completion = self._complete(provider, temp_policy, task, {"nonce": nonce}, render(task, {"nonce": nonce}))

@@ -221,7 +221,7 @@ def test_rounds_and_budgets_bound_the_loop(client, sample_agent):
 def test_failing_gates_roll_the_candidate_back(client, sample_agent):
     s, agent_id, dataset_id = _workspace(client, sample_agent, n_cases=10)
     run = _start(s, agent_id, dataset_id, run_holdout=False, min_improvement=0.99, stagnation_rounds=2)["optimization_run"]
-    assert run["status"] == "completed" and "no improvement" in run["stop_reason"]
+    assert run["status"] == "completed" and run["stop_reason"] == "the score did not change in 2 consecutive cycles"
     history = run["state"]["history"]
     assert history and all(h["outcome"] == "rolled_back" and h["reasons"] for h in history)
     candidate = s.get(f"/ws/candidates/{run['candidate_id']}")

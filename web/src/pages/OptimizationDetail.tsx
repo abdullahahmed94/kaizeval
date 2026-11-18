@@ -303,8 +303,8 @@ export function OptimizationDetailPage() {
               <Stat label="Best version (regression)" value={formatPercent(data.state.best_overall)}
                 note={data.best_run_id && data.best_run_id !== data.baseline_run_id
                   ? <Link to={`/evaluations/${data.best_run_id}`}>best run</Link> : undefined} />
-              <Stat label="Rounds" value={`${data.state.round ?? 0} of ${policy?.max_rounds ?? "?"}`} />
-              <Stat label="Rounds without a kept change" value={`${data.state.stagnation ?? 0} of ${policy?.stagnation_rounds ?? "?"}`} />
+              <Stat label="Cycles" value={policy?.max_rounds ? `${data.state.round ?? 0} of ${policy.max_rounds}` : `${data.state.round ?? 0}`} />
+              <Stat label="Cycles in a row with an unchanged score" value={`${data.state.stagnation ?? 0} of ${policy?.stagnation_rounds ?? "?"}`} />
             </div>
             {policy && (
               <details>

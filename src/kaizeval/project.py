@@ -82,20 +82,23 @@ evaluation:
   reviewers: 2             # independent reviewer agents per answer (0 = rules only, 1-7)
   target: 1.0              # keep improving until the regression score reaches this (1.0 = 100%)
   require_citations: true
+  # repeats: 3             # ask every question this many times and average (for agents whose answers vary)
 
 # --- 6. Automatic improvement (only for agents with candidate_protocol: true) --------------
+# The loop stops when the target is reached, or when two cycles in a row leave the score
+# unchanged. It then exits with the remaining recommendations and a report.
 optimize:
   enabled: false
-  max_rounds: 10           # safety cap: the loop also stops when nothing improves any more
+  # max_rounds: 20         # optional extra limit on the number of cycles
 """
 
 DEFAULTS: dict[str, Any] = {
     "project": "my-agent", "network": "offline", "model": None, "agent": {}, "knowledge": [],
     "requirements": "", "requirements_file": None, "instructions_file": None,
     "tests": {"cases": 30, "testers": 3, "holdout_fraction": 0.3, "languages": [], "import": [], "seed": 0},
-    "evaluation": {"reviewers": 2, "target": 1.0, "require_citations": True, "max_agent_calls": None,
-                   "max_model_calls": None},
-    "optimize": {"enabled": False, "max_rounds": 10, "stagnation_rounds": 3},
+    "evaluation": {"reviewers": 2, "target": 1.0, "require_citations": True, "repeats": 1,
+                   "max_agent_calls": None, "max_model_calls": None},
+    "optimize": {"enabled": False, "max_rounds": None, "stagnation_rounds": 2},
 }
 
 Log = Callable[[str], None]
@@ -401,7 +404,7 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
     evaluation = config["evaluation"]
     limits = {k: v for k, v in (("max_agent_calls", evaluation.get("max_agent_calls")),
                                 ("max_model_calls", evaluation.get("max_model_calls"))) if v is not None}
-    eval_config = {"reviewers": reviewers, "testers": int(tests["testers"]),
+    eval_config = {"reviewers": reviewers, "testers": int(tests["testers"]), "repeats": max(1, int(evaluation.get("repeats") or 1)),
                    "require_citations": bool(evaluation["require_citations"]), "limits": limits}
     started = api.call("POST", f"{base}/evaluation-runs", json={
         "agent_id": agent_id, "dataset_id": dataset_id, "mode": mode, "config": eval_config})
@@ -438,7 +441,11 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
             baseline_id = None
     if not baseline_id:
         state["baseline_run_id"] = run["id"]
-    state["last_run_id"] = run["id"]
+    # Two runs in a row with the same score mean the last change made no difference.
+    previous_overall = state.get("last_overall")
+    stalled = (previous_overall is not None and summary["overall"] is not None
+               and abs(previous_overall - summary["overall"]) < 1e-9 and state.get("last_dataset_id") == dataset_id)
+    state["last_run_id"], state["last_overall"], state["last_dataset_id"] = run["id"], summary["overall"], dataset_id
 
     # 7. automatic improvement of an isolated candidate, when the agent supports it
     optimization = None
@@ -455,7 +462,7 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
             raise ProjectError("automatic optimization needs a model (the optimizer role); add a model block")
         api.call("PATCH", base, json={"settings": {"allow_autonomous_optimization": True}})
         body = {"agent_id": agent_id, "dataset_id": dataset_id, "mode": "autonomous", "policy": {
-            "max_rounds": int(config["optimize"]["max_rounds"]), "stagnation_rounds": int(config["optimize"]["stagnation_rounds"]),
+            "max_rounds": config["optimize"]["max_rounds"], "stagnation_rounds": int(config["optimize"]["stagnation_rounds"]),
             "target_score": target, "eval_mode": mode, "eval_config": eval_config, "limits": limits, "run_holdout": True}}
         try:
             opt = api.call("POST", f"{base}/optimization-runs", json=body)
@@ -470,6 +477,14 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
         report_id = report["id"]
         best = report.get("best") or {}
         final_overall = best.get("overall") if best.get("overall") is not None else final_overall
+        # The optimization measures the same baseline again. If the two measurements differ, the
+        # agent's answers vary from run to run, and small score changes cannot be trusted.
+        measured_again = (report.get("baseline") or {}).get("overall")
+        if measured_again is not None and summary["overall"] is not None and abs(measured_again - summary["overall"]) >= 0.02:
+            noise = abs(measured_again - summary["overall"])
+            notes.append(f"The agent's answers vary between identical runs: the same baseline version scored "
+                         f"{summary['overall']:.1%} and then {measured_again:.1%}. Treat changes smaller than about "
+                         f"{noise * 100:.0f} percentage points as noise, and set evaluation.repeats to 2 or more to average it out.")
         candidate = report.get("candidate") or {}
         state["candidate_id"] = candidate.get("id")
         ab = (report.get("regression_comparison") or {}).get("overall")
@@ -479,6 +494,10 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
             "regression_ab": ab, "holdout": report.get("holdout"),
             "changes": [{"round": c["round"], "patch": c["patch"], "state": c["state"],
                          "reasons": (c.get("outcome") or {}).get("reasons", [])} for c in report.get("changes") or []],
+            "remaining_recommendations": [
+                {"title": r["title"], "detail": r["detail"], "category": r["category"],
+                 "cases_affected": r["impact"].get("cases_affected"), "suggested_patch": r["suggested_patch"],
+                 "why_not_automatic": r["auto_apply_blocker"]} for r in report.get("remaining_recommendations") or []],
             "candidate": {"id": candidate.get("id"), "status": candidate.get("status"),
                           "diff_from_baseline": candidate.get("diff_from_baseline")},
         }
@@ -504,6 +523,9 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
     if optimization and (optimization["candidate"] or {}).get("status") == "awaiting_decision":
         next_steps.append("Candidate B is waiting for your decision. Nothing was changed in production. "
                           "Run `kaizeval release approve` to promote it, or `kaizeval release reject`.")
+    elif not target_met and stalled:
+        next_steps.append("Two runs in a row scored the same, so the loop stops here: the last change made no "
+                          "difference. The report and the recommendations describe what still fails.")
     elif not target_met:
         if recommendations:
             next_steps.append("Apply the recommendations to your agent, then run `kaizeval run` again: the next run "
@@ -521,7 +543,7 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
         "testers": int(tests["testers"]), "cases": summary["cases"], "holdout_cases": counts.get("holdout", 0),
         "overall": summary["overall"], "pass_rate": summary["pass_rate"], "critical_failures": summary["critical_failures"],
         "by_category": summary["by_category"], "by_dimension": summary["by_dimension"],
-        "target": target, "final_overall": final_overall, "target_met": target_met,
+        "target": target, "final_overall": final_overall, "target_met": target_met, "stalled": bool(stalled),
         "failures": failures, "recommendations": recommendations, "comparison_with_baseline": comparison,
         "optimization": optimization, "holdout": holdout_result, "report": str(report_path),
         "console": engine.url, "notes": notes, "next_steps": next_steps,
@@ -577,6 +599,9 @@ def format_result(result: dict[str, Any]) -> str:
         ab = optimization.get("regression_ab")
         if ab:
             lines.append(f"    A/B on regression: {ab['delta_percentage_points']:+.2f} pp -> {ab['verdict']}")
+        if optimization.get("remaining_recommendations"):
+            lines.append("    still recommended for the best version:")
+            lines += [f"      - {r['title']} ({r['cases_affected']} case(s))" for r in optimization["remaining_recommendations"]]
         hold = (optimization.get("holdout") or {})
         if hold.get("status") == "completed":
             lines.append(f"    sealed holdout:    {hold['overall']['delta_percentage_points']:+.2f} pp -> {hold['overall']['verdict']}")

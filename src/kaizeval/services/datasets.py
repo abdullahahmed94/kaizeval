@@ -23,7 +23,7 @@ from .. import audit
 from ..gateway import Gateway, GatewayError
 from ..ground_truth import DocumentGroundTruthProvider, current_kb_chunks
 from ..models import Dataset, Document, TestCase
-from ..textutil import normalize, overlap_recall
+from ..textutil import expected_script, normalize, overlap_recall, similarity, written_in_script
 
 ANSWERABLE_CATEGORIES = ["knowledge", "citation", "edge_case"]
 MAX_TESTERS = 8
@@ -106,7 +106,7 @@ def _split(cases: list[dict[str, Any]], fraction: float, seed: int) -> None:
 def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: int, categories: list[str],
                  include_multi_turn: bool, unanswerable_share: float, languages: list[str],
                  document_ids: list[str] | None, seed: int, variation: int, existing_questions: set[str],
-                 notes: list[str], testers: int = 1) -> tuple[list[dict[str, Any]], bool]:
+                 notes: list[str], testers: int = 1, keep_unverified: bool = False) -> tuple[list[dict[str, Any]], bool]:
     provider = DocumentGroundTruthProvider(db, workspace_id)
     chunks = [(c, d) for c, d in current_kb_chunks(db, workspace_id, document_ids) if len(c.text) >= 60]
     if not chunks:
@@ -131,6 +131,7 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
 
     testers = max(1, min(MAX_TESTERS, int(testers), len(selected)))
     questions: list[dict[str, Any]] = []
+    dropped = 0
     for tester in range(testers):
         # Round-robin split: every tester works on its own passages, in its own model context.
         share = selected[tester::testers]
@@ -147,9 +148,22 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
                 key = normalize(q.question)
                 if q.chunk_ref not in by_ref or not q.question.strip() or key in existing_questions:
                     continue
+                # A model may return more than it was asked for, or the same question reworded.
+                # Keep at most per_chunk questions per passage (plus one multi-turn) and drop near-duplicates.
+                same_chunk = [x for x in questions if x["chunk_ref"] == q.chunk_ref]
+                is_multi_turn = q.category == "multi_turn" and bool(q.follow_up)
+                plain = [x for x in same_chunk if not x.get("follow_up")]
+                if (not is_multi_turn and len(plain) >= per_chunk) or (is_multi_turn and any(x.get("follow_up") for x in same_chunk)):
+                    dropped += 1
+                    continue
+                if not meta.synthetic and any(similarity(q.question, x["question"]) >= 0.75 for x in same_chunk):
+                    dropped += 1
+                    continue
                 existing_questions.add(key)
                 questions.append({**q.model_dump(), "tester": tester + 1, "persona": persona})
 
+    if dropped:
+        notes.append(f"{dropped} generated question(s) were discarded as surplus or near-duplicates.")
     items = []
     for index, q in enumerate(questions):
         text = by_ref[q["chunk_ref"]][0].text
@@ -163,6 +177,7 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
         drafts.update({d.ref: d for d in out.drafts})
 
     cases: list[dict[str, Any]] = []
+    unverified_dropped = 0
     for index, q in enumerate(questions):
         chunk_row, _document = by_ref[q["chunk_ref"]]
         draft = drafts.get(f"q{index}")
@@ -189,6 +204,11 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
                 category = "knowledge"
         elif category == "multi_turn":
             category = "knowledge"
+        if verification.status == "unverified" and not keep_unverified:
+            # A generated question whose reference cannot be tied to verbatim evidence is not a
+            # trustworthy test (it is often a vague or meta question). It is left out.
+            unverified_dropped += 1
+            continue
         cases.append({
             "key": f"q{index}", "category": category, "severity": q["severity"], "language": "en", "turns": turns,
             "expected": expected, "answer_status": verification.status,
@@ -198,26 +218,53 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
                            "tester": q.get("tester", 1), "persona": q.get("persona", "")},
         })
 
+    if unverified_dropped:
+        notes.append(f"{unverified_dropped} generated question(s) were left out because no reference answer could be "
+                     "linked to verbatim evidence.")
     if n_unanswerable:
         topics = sorted({(c.section or d.filename) for c, d in chunks})[:40]
         out, meta = gateway.generate("generate.unanswerable", {"topics": topics, "n": n_unanswerable})
         synthetic = synthetic or meta.synthetic
-        for index, item in enumerate(out.questions[:n_unanswerable]):
+        candidates = []
+        for item in out.questions[:n_unanswerable]:
             key = normalize(item.question)
             if not item.question.strip() or key in existing_questions:
                 continue
             existing_questions.add(key)
-            closest = max((overlap_recall(item.question, c.text) for c, _ in chunks), default=0.0)
-            status = "needs_human_review" if closest >= 0.8 else "draft"
+            closest_chunk, closest = max(((c, overlap_recall(item.question, c.text)) for c, _ in chunks), key=lambda pair: pair[1])
+            candidates.append((item, closest_chunk, closest))
+        # A question is only a valid "unanswerable" test if the knowledge base really cannot answer
+        # it. Ask the reference role to try, using the closest passage; if it succeeds with verbatim
+        # evidence, the question is answerable after all and is discarded.
+        answerable: set[int] = set()
+        if candidates and not meta.synthetic:
+            checks, _ = gateway.generate("reference.draft", {"items": [
+                {"ref": f"u{i}", "question": item.question, "chunk_text": chunk.text, "is_follow_up": False}
+                for i, (item, chunk, _score) in enumerate(candidates)]})
+            for draft in checks.drafts:
+                if not draft.ref.startswith("u") or not draft.ref[1:].isdigit() or int(draft.ref[1:]) >= len(candidates):
+                    continue
+                index = int(draft.ref[1:])
+                verdict = provider.verify_reference(candidates[index][1].id, answer=draft.answer, key_facts=draft.key_facts,
+                                                    quote=draft.evidence_quote, sufficient=draft.sufficient)
+                if verdict.status == "draft":
+                    answerable.add(index)
+        if answerable:
+            notes.append(f"{len(answerable)} proposed out-of-scope question(s) were discarded because the "
+                         "knowledge base can answer them.")
+        for index, (item, _chunk, closest) in enumerate(candidates):
+            if index in answerable:
+                continue
+            status = "needs_human_review" if closest >= 0.6 else "draft"
             cases.append({
                 "key": f"u{index}", "category": "unanswerable", "severity": "high", "language": "en",
                 "turns": [{"role": "user", "content": item.question}],
                 "expected": {"behavior": "abstain", "answer": "", "key_facts": []}, "answer_status": status,
                 "evidence_refs": [],
                 "provenance": {"origin": "generated", "reason": item.reason, "generator": "fake" if synthetic else "model",
-                               "verification": "a passage closely matches this question; confirm it is really out of scope"
+                               "verification": "a passage partly matches this question; confirm it is really out of scope"
                                if status == "needs_human_review" else
-                               "no passage closely matches this question (keyword check, not proof of absence)"},
+                               "no passage answers this question (checked against the closest passage; not proof of absence)"},
             })
 
     if languages:
@@ -229,15 +276,25 @@ def _draft_cases(db: Session, gateway: Gateway, *, workspace_id: str, n_cases: i
             synthetic = synthetic or meta.synthetic
             by_key = {c["key"]: c for c in sources}
             made = 0
+            wrong_script = 0
             for variant in out.variants:
                 source = by_key.get(variant.case_ref)
                 if source is None or not variant.question.strip():
+                    continue
+                if normalize(variant.question) == normalize(source["turns"][0]["content"]):
+                    continue  # not translated at all
+                script = expected_script(variant.language)
+                if script and not written_in_script(variant.question, script):
+                    wrong_script += 1  # for example "Arabic" written in Latin letters: not a usable test
                     continue
                 made += 1
                 cases.append({**source, "key": f"{source['key']}:{variant.language}:{made}", "category": "language_variant",
                               "language": variant.language, "variant_of": source["key"],
                               "turns": [{"role": "user", "content": variant.question}],
                               "provenance": {**source["provenance"], "variant_of_question": source["turns"][0]["content"]}})
+            if wrong_script:
+                notes.append(f"{wrong_script} language variant(s) were discarded because they were not written in the "
+                             "script of the requested language. The model may not handle that language well.")
             if made == 0:
                 notes.append("Language variants were requested but none were produced. "
                              + ("The fake provider cannot translate; configure a real model." if meta.synthetic
@@ -255,7 +312,7 @@ def generate_dataset(db: Session, dataset: Dataset, params: dict[str, Any]) -> D
         include_multi_turn=bool(params.get("include_multi_turn", True)),
         unanswerable_share=float(params.get("unanswerable_share", 0.2)), languages=params.get("languages") or [],
         document_ids=params.get("document_ids"), seed=dataset.seed, variation=0, existing_questions=set(), notes=notes,
-        testers=int(params.get("testers") or 1))
+        testers=int(params.get("testers") or 1), keep_unverified=bool(params.get("keep_unverified")))
     if len(cases) < 2:
         raise DatasetError("the generator produced fewer than two usable cases")
     _split(cases, dataset.holdout_fraction, dataset.seed)

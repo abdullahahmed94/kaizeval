@@ -65,3 +65,32 @@ def test_api_quickstart_script_runs_against_a_live_server(sample_agent):
     assert out["report"].startswith("# Kaizeval evaluation report")
     calls = [line for line in lines if "->" in line and line.strip().split()[0] in ("GET", "POST")]
     assert len(calls) >= 10 and all(line.rstrip().endswith(("200", "201", "202")) for line in calls)
+
+
+def test_model_backed_example_agent_speaks_the_candidate_protocol(client, mock_model, monkeypatch):
+    """examples/llm_agent.py: a model-backed agent that Kaizeval can verify, inspect and patch."""
+    monkeypatch.setenv("LLM_BASE_URL", mock_model.url + "/v1")
+    monkeypatch.setenv("LLM_MODEL", "mock")
+    monkeypatch.setenv("AGENT_ADMIN_TOKEN", "example-admin-token")
+    spec = importlib.util.spec_from_file_location("llm_agent", EXAMPLES / "llm_agent.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    url, server = serve(module.create_app())
+    try:
+        s = new_user(client)
+        agent = s.post("/ws/agents", json={"name": "llm agent", "adapter": "local_config", "config": {"base_url": url},
+                                           "credential": "example-admin-token", "access_level": "candidate_write"})
+        verified = s.post(f"/ws/agents/{agent['id']}/verify")
+        assert {"invoke", "inspect", "create_candidate", "apply_patch", "restore_candidate"} <= set(verified["capabilities"])
+        inspected = s.get(f"/ws/agents/{agent['id']}/configuration")
+        assert inspected["schema"]["system_prompt"]["type"] == "string" and inspected["config"]["top_k"] == 1
+        before = len(mock_model.requests)
+        csv = b"question,key_facts\nWhat is the refund window?,30 days\n"
+        dataset_id = s.post("/ws/datasets:import", files={"file": ("q.csv", csv, "text/csv")})["dataset"]["id"]
+        run = run_eval(s, agent["id"], dataset_id, mode="deterministic")
+        assert run["status"] == "completed" and run["summary"]["agent_errors"] == 0
+        sent = mock_model.requests[before:]
+        assert len(sent) == 1 and sent[0]["messages"][0]["content"] == module.BASELINE["system_prompt"]
+        assert "Refund window" in sent[0]["messages"][-1]["content"]  # the retrieved passage reached the model
+    finally:
+        server.should_exit = True

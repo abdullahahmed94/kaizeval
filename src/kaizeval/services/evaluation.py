@@ -22,7 +22,7 @@ from ..connectors import AdapterError, AgentAdapter, build_adapter
 from ..gateway import RUBRIC, Gateway, GatewayError
 from ..jobs import JobCancelled, JobContext
 from ..models import Agent, CaseResult, Dataset, EvaluationRun, EvidenceChunk, TestCase, utcnow
-from ..textutil import contains_fact, dominant_script, looks_like_abstention, normalize
+from ..textutil import contains_fact, dominant_script, is_verifiable_refusal, looks_like_abstention, normalize
 from .datasets import HoldoutAccess, cases_for_run
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -109,6 +109,14 @@ def dimensions_for(case: TestCase, config: dict[str, Any]) -> list[str]:
     return dims
 
 
+def _names_source(text: str, filename: str) -> bool:
+    """True when an answer names a knowledge document in its text (file name, or its name without extension)."""
+    name = normalize(filename)
+    stem = name.rsplit(".", 1)[0]
+    variants = {name, stem, stem.replace("-", " ").replace("_", " ")}
+    return any(len(v) >= 5 and v in text for v in variants)
+
+
 def deterministic_checks(case: TestCase, replies: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Checks that need no model. ``decisive`` marks results that outrank a model judgment."""
     expected = case.expected or {}
@@ -138,13 +146,20 @@ def deterministic_checks(case: TestCase, replies: list[dict[str, Any]], config: 
                 missing += [f for f in follow_facts if f not in follow_found]
             total = len(found) + len(missing)
             basis = "approved reference" if case.answer_status == "approved" else "evidence-linked draft reference"
-            out["correctness"] = {"score": round(len(found) / total, 4) if total else 0.0, "decisive": True,
+            # Key facts are written in the language of the documents. For a question asked in another
+            # language the wording of a correct answer can differ, so a reviewer decides when there is one.
+            out["correctness"] = {"score": round(len(found) / total, 4) if total else 0.0,
+                                  "decisive": case.category != "language_variant",
                                   "detail": f"{len(found)}/{total} key facts present ({basis})", "missing": missing}
 
     if config.get("require_citations") and case.evidence_refs:
         cited = [normalize(c) for r in replies for c in r.get("citations", [])]
         expected_files = {normalize(ref.get("filename", "")) for ref in case.evidence_refs if ref.get("filename")}
         known = {normalize(name) for name in config.get("_known_sources", [])}
+        if not cited:
+            # Many agents name their source in the answer itself instead of returning a separate list.
+            spoken = normalize(" ".join(texts))
+            cited = [name for name in sorted(known | expected_files) if name and _names_source(spoken, name)]
         if not cited:
             out["citation_accuracy"] = {"score": 0.0, "decisive": True, "detail": "the answer cites no source"}
         elif any(any(name and name in c for name in expected_files) for c in cited):
@@ -195,10 +210,20 @@ def _judge(db: Session, gateway: Gateway, run: EvaluationRun, case: TestCase, re
     inputs = _judge_inputs(db, case, replies, dims)
     judgments: list[dict[str, Any]] = []
 
+    answer_text = replies[-1].get("text", "") if replies else ""
+
     def call(task: str, payload: dict[str, Any], reviewer: int | None = None) -> dict[str, Any]:
         result, meta = gateway.generate(task, payload)
         record = {"task": task, "role": meta.role, "model": meta.model, "prompt_version": meta.prompt_version,
                   "synthetic": meta.synthetic, "reviewer": reviewer, **result.model_dump()}
+        # A reviewer may claim that the agent declined. That claim only counts when it quotes a
+        # sentence that is really in the answer and reads like a refusal; otherwise it is overruled.
+        if record["scores"].get("abstention", 0.0) > 0.5 and not is_verifiable_refusal(
+                answer_text, record.get("refusal_quote", ""), config.get("abstain_patterns") or []):
+            record["scores"]["abstention"] = 0.0
+            record["overruled"] = "claimed a refusal without quoting one from the answer"
+            if set(dims) == {"abstention"}:
+                record["verdict"] = "fail"
         judgments.append(record)
         return record
 
@@ -322,6 +347,15 @@ def summarize(db: Session, run: EvaluationRun, results: list[CaseResult], cases:
     reviewers = reviewer_count(run.mode, run.config)
     if reviewers > 1:
         caveats.append("Agreement between reviewers is not ground truth; model reviewers can share the same bias.")
+        try:
+            gateway = Gateway(db, run.workspace_id)
+            first, first_policy = gateway.resolve("evaluator_primary")
+            second, second_policy = gateway.resolve("evaluator_secondary")
+            if (first.id, first_policy.model or first.default_model) == (second.id, second_policy.model or second.default_model):
+                caveats.append("All reviewers ran on the same model (with different briefs). For a genuinely independent "
+                               "second opinion, route the evaluator_secondary role to a different model.")
+        except GatewayError:
+            pass
     if len(scored) < len(results):
         caveats.append(f"{len(results) - len(scored)} case(s) could not be scored (no verified reference or judge).")
     return {

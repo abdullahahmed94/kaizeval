@@ -103,6 +103,13 @@ def optimization_report(db: Session, run: OptimizationRun) -> dict[str, Any]:
         "rounds": (run.state or {}).get("round", 0), "policy": run.policy,
         "baseline": _run_block(baseline), "best": _run_block(best),
         "regression_comparison": comparison, "holdout": run.holdout,
+        "remaining_recommendations": [
+            {"id": r.id, "title": r.title, "detail": r.detail, "category": r.category,
+             "target_component": r.target_component, "risk": r.risk, "impact": r.impact, "state": r.state,
+             "auto_apply_available": r.auto_apply_available, "suggested_patch": r.suggested_patch,
+             "auto_apply_blocker": r.auto_apply_blocker}
+            for r in db.scalars(select(Recommendation).where(Recommendation.run_id == run.best_run_id)
+                                .order_by(Recommendation.priority.desc()))] if run.best_run_id else [],
         "changes": [{"round": p.round, "patch": p.patch, "diff": p.diff, "rationale": p.rationale, "risk": p.risk,
                      "state": p.state, "outcome": p.outcome, "decided_by": p.decided_by, "synthetic": p.synthetic}
                     for p in patches],
@@ -170,7 +177,11 @@ def to_markdown(report: dict[str, Any]) -> str:
                       f"(95% CI {o.get('ci95_percentage_points')}). Verdict: **{o['verdict']}**. {o['interpretation']}", ""]
         else:
             lines += [f"{holdout.get('status', 'not run')}: {holdout.get('reason', '')}", ""]
-        lines += ["## Changes", ""]
+        remaining = report.get("remaining_recommendations") or []
+        lines += ["## Recommendations for what still fails", ""]
+        lines += [f"- **{rec['title']}** ({rec['category']}, risk {rec['risk']}, {rec['impact'].get('cases_affected')} case(s))"
+                  for rec in remaining] or ["- None: no failing pattern was found in the best version."]
+        lines += ["", "## Changes", ""]
         for change in report.get("changes") or []:
             lines += [f"- Round {change['round']}: `{change['patch']}` -> **{change['state']}**. {change.get('rationale', '')}"]
         lines.append("")

@@ -1,0 +1,39 @@
+# Test and automatically improve the model-backed example agent (examples/llm_agent.py)
+# with a real local model.
+#
+#   export LLM_MODEL=your-model-name AGENT_ADMIN_TOKEN=choose-a-secret
+#   uvicorn examples.llm_agent:app --port 8200                      (terminal 1)
+#   kaizeval run -c examples/llm_agent.kaizeval.yaml                (terminal 2)
+project: llm-support-agent
+network: offline
+
+model:
+  base_url: http://localhost:11434/v1
+  model: your-model-name          # the same or a different model than the agent uses
+  params:
+    max_retries: 2
+
+agent:
+  url: http://127.0.0.1:8200
+  candidate_protocol: true
+  admin_token_env: AGENT_ADMIN_TOKEN
+
+requirements: |
+  Answer customer questions using only the company documents.
+  Give the exact numbers and conditions stated in the documents.
+  Say you do not know when the documents do not contain the answer.
+
+knowledge:
+  - ../src/kaizeval/sample_agent/kb/*.md
+
+tests:
+  cases: 16
+  testers: 2
+  holdout_fraction: 0.25
+
+evaluation:
+  reviewers: 1
+  target: 1.0
+
+optimize:
+  enabled: true

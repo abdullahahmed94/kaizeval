@@ -113,7 +113,7 @@ works alongside the evaluation and tracing tools you already use.
 Requires Python 3.10+. No Docker, no API key, no account.
 
 ```bash
-pip install https://github.com/abdullahahmed94/kaizeval/releases/download/v0.1.0/kaizeval-0.1.0-py3-none-any.whl
+pip install https://github.com/abdullahahmed94/kaizeval/releases/download/v0.2.0/kaizeval-0.2.0-py3-none-any.whl
 kaizeval demo
 ```
 
@@ -178,8 +178,14 @@ and it compares the new run with the first one, case by case:
 ```
 
 (That output is from `examples/kaizeval.yaml` with the built-in fake model, so it is SYNTHETIC.)
-The loop aims for your target, and 100% is a target, not a promise: it also stops when nothing
-improves any more or a limit is hit, and says why. The release decision is always yours.
+The loop keeps going until your target is reached, or until two cycles in a row leave the score
+unchanged; then it exits with the recommendations for what still fails and a report. 100% is the
+goal, not a promise. The release decision is always yours.
+
+A plain HTTP agent can be tested and scored but not changed from outside, so for such an agent you
+(or your coding assistant) apply the recommendations and run again. To let Kaizeval close the loop
+itself, add the candidate protocol to your agent with a few lines of
+[`kaizeval.agentkit`](docs/PROJECT_MODE.md#making-your-own-agent-automatic).
 Full reference: [docs/PROJECT_MODE.md](docs/PROJECT_MODE.md).
 
 ## Use it from a coding assistant
@@ -262,7 +268,7 @@ Exit code `0` passes, `1` means a quality gate failed, `2` is an operational err
 Action:
 
 ```yaml
-- uses: abdullahahmed94/kaizeval@v0.1.0
+- uses: abdullahahmed94/kaizeval@v0.2.0
   with:
     url: ${{ vars.KAIZEVAL_URL }}
     email: ${{ secrets.KAIZEVAL_EMAIL }}
@@ -277,7 +283,7 @@ Action:
 
 | Area | What you get |
 |---|---|
-| Agents | Generic HTTP and OpenAI-compatible connectors (black box); a candidate protocol for agents that can be safely patched; capability discovery with reasons |
+| Agents | Generic HTTP and OpenAI-compatible connectors (black box); a candidate protocol for agents that can be safely patched, with `kaizeval.agentkit` to add it to your own agent in a few lines; capability discovery with reasons |
 | Models | One gateway for eight roles (generator, reference drafter, two judges, arbiter, root cause, optimizer, spec inference); preflight; budgets; per-role usage; no silent fallback |
 | Knowledge | PDF, DOCX, Markdown, text; versioned; every passage traceable to file, page or section and offsets |
 | Specification | From your requirements, inferred, or both; versioned; Review & Edit, Approve or Skip |
@@ -302,14 +308,21 @@ Recommendations, Optimization, Candidates, Audit, Workspace settings.
 Kaizeval is **alpha** software. Please read these before relying on it.
 
 - A score on generated tests describes behaviour on those tests. It is not real-world accuracy.
-- Reaching the target score is a goal, not a guarantee. The improvement loop is bounded and can stop below it.
+- Reaching the target score is a goal, not a guarantee. The improvement loop stops when two cycles in a row change nothing, which can be below the target.
 - Model judges are estimates and can be wrong or biased. Two judges agreeing is not proof.
-- Automatic optimization works only for agents that implement the candidate protocol. No
-  vendor-specific connector is included; arbitrary platforms are evaluated as black boxes.
-- Release 0.1.0 has not been run against a real model server: the OpenAI-compatible path is tested
-  against a local mock server. CI builds and health-checks the Docker Compose stack with
-  PostgreSQL on every push, while the functional tests run on SQLite.
-  Details: [docs/MVP_ACCEPTANCE.md](docs/MVP_ACCEPTANCE.md).
+- Automatic optimization works only for agents that implement the candidate protocol (a few lines
+  with `kaizeval.agentkit`). No vendor-specific connector is included; other agents are evaluated as
+  black boxes and get recommendations.
+- It has been run end to end against one real local model (`qwen2.5:7b` on Ollama), including a
+  model-backed agent improved through its system prompt; what happened, what broke and what was
+  fixed is in [docs/REAL_MODEL_VALIDATION.md](docs/REAL_MODEL_VALIDATION.md). Other models may
+  behave differently, and no hosted provider was exercised. CI builds and health-checks the Docker
+  Compose stack with PostgreSQL on every push, while the functional tests run on SQLite.
+- Model reviewers make mistakes. One claimed a refusal that was not there; such claims are now
+  verified against the answer, but treat reviewer scores as estimates, and review language
+  variants yourself.
+- An agent that is itself a model answers differently each time. Use `evaluation.repeats` and do
+  not read small differences as real.
 - Sign-in is local accounts only (no single sign-on yet). Holdout isolation is enforced in code,
   not by a process boundary. No independent security audit has been done.
 - Evaluation sends real requests to your agent. Use a test deployment if its tools have side
@@ -324,12 +337,13 @@ Kaizeval is **alpha** software. Please read these before relying on it.
 | [Workflow, step by step](docs/WORKFLOW.md) | [API quickstart script](examples/api_quickstart.py) |
 | [REST API](docs/API.md) | [LLM Gateway](docs/LLM_GATEWAY.md) |
 | [Connector SDK](docs/CONNECTOR_SDK.md) | [Security notes](docs/SECURITY.md) |
-| [Acceptance status](docs/MVP_ACCEPTANCE.md) | [Troubleshooting](docs/TROUBLESHOOTING.md) |
+| [Validation against a real model](docs/REAL_MODEL_VALIDATION.md) | [Acceptance status](docs/MVP_ACCEPTANCE.md) |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | [Changelog](CHANGELOG.md) |
 | [Implementation plan and roadmap](docs/IMPLEMENTATION_PLAN.md) | [Release checklist](docs/RELEASE_CHECKLIST.md) |
 
 ## Roadmap
 
-Validation on PostgreSQL, S3 storage and real local models · judge calibration against human
+A full PostgreSQL test run and S3 storage tests · validation with more models and a hosted provider · judge calibration against human
 labels · knowledge-base health report · connectors for common agent frameworks · service tokens
 and scheduled runs · single sign-on · adversarial test packs · SQL and API ground truth.
 

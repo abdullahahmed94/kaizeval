@@ -24,6 +24,7 @@ ABSTAIN_PATTERNS = [
     r"\b(?:not|isn't|is not) (?:covered|mentioned|available|stated|found) in\b",
     r"\boutside (?:of )?(?:my|the) (?:scope|knowledge)\b", r"\bdo not have (?:that|this|any|enough) information\b",
     r"\bdon't have (?:that|this|any|enough) information\b",
+    r"\b(?:does|do)(?: not|n't) (?:contain|include|have|provide) (?:any |enough |that |this |the )?(?:information|details|data)\b",
     r"لا أعرف", r"لا اعرف", r"مش عارف", r"لا تتوفر", r"ليس لدي معلومات", r"معنديش معلومة",
 ]
 _ABSTAIN = re.compile("|".join(ABSTAIN_PATTERNS), re.IGNORECASE)
@@ -76,6 +77,78 @@ def overlap_recall(reference: str, candidate: str) -> float:
         return 0.0
     cand = set(content_tokens(candidate))
     return len(ref & cand) / len(ref)
+
+
+_NEGATION = re.compile(
+    r"\b(?:no|not|cannot|unable|sorry|unfortunately|outside|beyond|neither|nor|never|none)\b|n't|"
+    r"\b(?:ne|pas|aucun|desole|d\u00e9sol\u00e9|kein|keine|nicht|leider|ningun|ninguna|lo siento|nao|n\u00e3o)\b|"
+    r"\u0644\u0627 |\u0644\u064a\u0633|\u063a\u064a\u0631|\u0645\u0634 |\u0644\u0645 |\u0644\u0646 |\u0639\u0630\u0631|\u0622\u0633\u0641|\u0645\u062a\u0623\u0633\u0641|\u0644\u0644\u0623\u0633\u0641",
+    re.IGNORECASE)
+
+
+def is_verifiable_refusal(response: str, quote: str, extra_patterns: list[str] | None = None) -> bool:
+    """A reviewer's claim that the agent declined counts only when it quotes a sentence that really
+    is in the response and that reads like a refusal (a known refusal phrase, or at least a negation)."""
+    if not quote or not quote.strip():
+        return False
+    if normalize(quote) not in normalize(response):
+        return False
+    if looks_like_abstention(quote, extra_patterns):
+        return True
+    if not _NEGATION.search(quote):
+        return False
+    # "Items returned late are not eligible" has a negation but is an answer, not a refusal. In
+    # Latin-script text also require a word about the speaker or about knowing/finding the answer.
+    return dominant_script(quote) != "latin" or bool(_REFUSAL_HINT.search(quote))
+
+
+_REFUSAL_HINT = re.compile(
+    r"\b(?:i|we|know|information|answer|help|find|sure|available|covered|mentioned|documents?|provide|details?|"
+    r"je|nous|sais|ich|wir|weiß|yo|sé)\b", re.IGNORECASE)
+
+
+def _char_script(ch: str) -> str:
+    name = unicodedata.name(ch, "")
+    if "ARABIC" in name:
+        return "arabic"
+    if "CJK" in name or "HIRAGANA" in name or "KATAKANA" in name:
+        return "cjk"
+    if "CYRILLIC" in name:
+        return "cyrillic"
+    if "LATIN" in name:
+        return "latin"
+    return "other"
+
+
+def written_in_script(text: str, script: str) -> bool:
+    """True when every word is either fully in ``script`` or fully Latin (names, units, acronyms).
+    Words that mix scripts, or use a third script, reveal a broken translation."""
+    seen = False
+    for word in re.findall(r"[^\W\d_]+", text or "", re.UNICODE):
+        kinds = {_char_script(ch) for ch in word}
+        if kinds == {script}:
+            seen = True
+        elif kinds != {"latin"}:
+            return False
+    return seen
+
+
+def similarity(a: str, b: str) -> float:
+    """Jaccard similarity of the content words of two texts (0 = nothing in common, 1 = same words)."""
+    x, y = set(content_tokens(a)), set(content_tokens(b))
+    return len(x & y) / len(x | y) if x and y else 0.0
+
+
+# Scripts a language is written in, for the languages people most often ask variants in.
+LANGUAGE_SCRIPTS = (("arab", "arabic"), ("persian", "arabic"), ("farsi", "arabic"), ("urdu", "arabic"),
+                    ("chinese", "cjk"), ("japanese", "cjk"), ("mandarin", "cjk"), ("cantonese", "cjk"),
+                    ("russian", "cyrillic"), ("ukrainian", "cyrillic"), ("bulgarian", "cyrillic"), ("serbian", "cyrillic"))
+
+
+def expected_script(language: str) -> str | None:
+    """The script a named language is normally written in, when known."""
+    name = (language or "").lower()
+    return next((script for key, script in LANGUAGE_SCRIPTS if key in name), None)
 
 
 def looks_like_abstention(text: str, extra_patterns: list[str] | None = None) -> bool:

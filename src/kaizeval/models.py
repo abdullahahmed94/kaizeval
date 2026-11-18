@@ -95,7 +95,7 @@ class ModelRolePolicy(_Scoped, Base):
     model: Mapped[str] = mapped_column(String(200), default="")
     temperature: Mapped[float] = mapped_column(Float, default=0.0)
     max_tokens: Mapped[int] = mapped_column(Integer, default=2000)
-    timeout_s: Mapped[float] = mapped_column(Float, default=120.0)
+    timeout_s: Mapped[float] = mapped_column(Float, default=300.0)
 
 
 class ModelInvocation(_Scoped, Base):
