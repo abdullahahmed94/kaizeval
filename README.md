@@ -331,8 +331,9 @@ Kaizeval is **alpha** software. Please read these before relying on it.
   model-backed agent improved through its system prompt, and against one hosted provider with an
   API key; what happened, what broke and what was fixed is in
   [docs/REAL_MODEL_VALIDATION.md](docs/REAL_MODEL_VALIDATION.md). Other models and other
-  providers may behave differently. CI builds and health-checks the Docker
-  Compose stack with PostgreSQL on every push, while the functional tests run on SQLite.
+  providers may behave differently. CI runs the test-suite on SQLite and on PostgreSQL and health-checks
+  the Docker Compose stack on every push. The S3 backend is tested against a local S3 emulator,
+  not against a real object store.
 - Model reviewers make mistakes. One claimed a refusal that was not there; such claims are now
   verified against the answer, but treat reviewer scores as estimates, and review language
   variants yourself.
@@ -358,7 +359,7 @@ Kaizeval is **alpha** software. Please read these before relying on it.
 
 ## Roadmap
 
-A full PostgreSQL test run and S3 storage tests · validation with more models and providers · judge calibration against human
+S3 against a real object store · validation with more models and providers · judge calibration against human
 labels · knowledge-base health report · connectors for common agent frameworks · service tokens
 and scheduled runs · single sign-on · adversarial test packs · SQL and API ground truth.
 

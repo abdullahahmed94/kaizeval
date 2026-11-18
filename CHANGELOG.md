@@ -38,6 +38,9 @@ All notable changes to this project are documented here. The format follows
   `model.temperature` and `model.timeout_s` in the project file set the limits of every call.
   Unknown keys under `model` are now an error.
 
+- Tests for the S3 storage backend (against a local S3 emulator) and a CI job that runs the whole
+  test-suite on PostgreSQL.
+
 ### Changed
 - The improvement loop has no fixed number of rounds any more. It runs until the target is
   reached or until three cycles in a row leave the score unchanged (`stagnation_rounds: 3`).

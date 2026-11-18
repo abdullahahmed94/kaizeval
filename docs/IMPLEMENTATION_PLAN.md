@@ -67,14 +67,15 @@ inconsistencies, resolved as follows:
 Verified by CI: the test-suite on three Python versions, the console build, the wheel with the
 demo journey, and the Docker Compose stack starting on PostgreSQL. Verified by hand against one real local model and one hosted provider: every model-assisted
 step and the improvement loop ([REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md)). Still
-unverified: the full journey on PostgreSQL, the S3 storage backend, the network-isolated
-override, other models and other hosted providers.
+unverified: S3 against a real object store (it is tested against an emulator), the
+network-isolated override, other models and other hosted providers. The test-suite also passes
+on PostgreSQL.
 Not implemented: see the list at the end of [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md).
 
 ## Next milestones
 
-1. **Validate what is unverified**: a PostgreSQL run of the
-   full test-suite; S3 storage tests; runs against more models and providers.
+1. **Validate what is unverified**: S3 against a real object store; the network-isolated
+   override; runs against more models and providers.
 2. **Trust in scores**: judge calibration against a human-labelled sample; knowledge-base health
    report (contradictions, duplicates, ambiguous passages).
 3. **Reach**: connectors for common agent frameworks (invoke + traces first); service tokens for

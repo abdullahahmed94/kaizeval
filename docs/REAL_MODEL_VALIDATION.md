@@ -179,8 +179,9 @@ Then the run itself:
 | Sealed holdout | +7.4 points over 6 cases, interval +2.3 to +12.6, verdict *improved* |
 
 About 230 model calls in 26 minutes, none invalid. Token use was about 1,600 per reviewer call
-(161,000 for the 99 reviewer calls); the cost was not measured by Kaizeval because no prices
-were configured for the provider.
+(161,000 for the 99 reviewer calls). The provider billed **3.35 USD** for the whole run, roles
+check included; Kaizeval itself reported no cost because no prices were configured for the
+provider (`params.price_per_1k_input` and `params.price_per_1k_output`).
 
 Compared with the local 7B model on the same documents: no question was discarded during
 generation (the local model lost 6 of 25), the dialect variants were usable, and the optimizer's

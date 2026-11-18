@@ -5,7 +5,7 @@ checked by hand, and what is not done. Run the evidence yourself:
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # 135 tests; strict offline; fails on any non-loopback connection
+pytest                 # 137 tests; strict offline; fails on any non-loopback connection
 kaizeval demo          # the whole journey on the bundled sample agent
 ```
 
@@ -60,19 +60,23 @@ That needs a real model that you configure.
 
 Every push runs the CI workflow (`.github/workflows/ci.yml`) on GitHub-hosted runners:
 
-- the full test-suite on Python 3.10, 3.11 and 3.12 (SQLite);
+- the full test-suite on Python 3.10, 3.11 and 3.12 (SQLite), and once more with every table in
+  PostgreSQL 16;
 - the web console build;
 - a wheel build, then `kaizeval demo` end to end from the installed wheel;
 - **Docker Compose with PostgreSQL**: the image is built, the stack is started with the API, a
   worker, PostgreSQL and the sample agent, the migrations are applied to PostgreSQL, and the
   health check, the API and the console are requested.
 
+The whole test-suite was also run by hand against PostgreSQL 16.2 on Windows (all tests passed,
+with the runs and results stored in PostgreSQL); the CI job repeats that on every push. One test
+starts `kaizeval run` in a fresh process with its own embedded engine, which always uses SQLite.
+
 Still unverified:
 
-- **The full journey on PostgreSQL.** CI proves that the stack starts and the schema migrates on
-  PostgreSQL; the functional test-suite itself runs on SQLite. All database access goes through
-  SQLAlchemy with no dialect-specific SQL.
-- **S3 / MinIO storage** is implemented (`storage.S3Storage`) and has no test.
+- **S3 against a real service.** `storage.S3Storage` is tested (`tests/test_storage_s3.py`:
+  round trip, bucket creation, the document upload path, per-workspace prefixes) against a local
+  S3 API emulator. It was not run against MinIO or a cloud bucket.
 - **The network-isolated Compose override** is provided and unvalidated.
 - **Other models and providers.** One local model and one hosted provider (connected mode, API
   key) were exercised end to end (see [REAL_MODEL_VALIDATION.md](REAL_MODEL_VALIDATION.md)). The
