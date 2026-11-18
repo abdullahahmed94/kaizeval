@@ -18,6 +18,7 @@ release notes say so explicitly.
 - [ ] `ruff check src tests` passes.
 - [ ] `mypy` passes.
 - [ ] `pytest` passes (strict offline; the socket guard reports no external connection).
+- [ ] `pytest` passes with `KAIZEVAL_DATABASE_URL` pointing at an empty PostgreSQL database.
 - [ ] `cd web && npm ci && npm run build` passes.
 - [ ] `python -m build` produces a wheel that contains `kaizeval/webui/index.html`.
 - [ ] `pip install dist/*.whl` in a clean environment, then `kaizeval demo --no-serve` completes.

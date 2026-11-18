@@ -5,7 +5,7 @@ You describe your agent in `kaizeval.yaml`; `kaizeval run` does the rest and can
 often as you like.
 
 ```bash
-pip install kaizeval-0.2.0-py3-none-any.whl
+pip install kaizeval
 kaizeval init          # writes kaizeval.yaml
 kaizeval run           # connect, write tests, test, review, recommend, compare
 ```
@@ -26,15 +26,16 @@ flowchart TD
     E --> F["Testers call the agent in parallel"]
     F --> G["M reviewers score every answer<br/>independently, arbiter on disagreement"]
     G --> H["Score, failed cases,<br/>recommendations, report"]
-    H --> I{"Target reached?"}
+    H --> I{"Target reached, or<br/>3 cycles without change?"}
     I -->|"No, agent can be patched"| J["Patch isolated candidate B<br/>re-test, A/B, keep or roll back"]
     J --> I
     I -->|"No, black-box agent"| K["You (or your coding assistant) apply<br/>the recommendations, then run again"]
     K --> F
-    I -->|Yes| L["Final check on the sealed holdout"]
+    I -->|Yes| L["Final check on the sealed holdout<br/>report and remaining recommendations"]
     L --> M{"You decide"}
-    M -->|approve| N(["Promote candidate B"])
-    M -->|reject| O(["Keep baseline A"])
+    M -->|"continue: kaizeval run --continue"| J
+    M -->|"release: kaizeval release approve"| N(["Promote candidate B"])
+    M -->|"reject"| O(["Keep baseline A"])
 ```
 
 1. **Model.** Registers the model endpoint and runs the preflight. Without a `model` block only

@@ -7,6 +7,7 @@ and, when the agent allows it, improves an isolated copy and proves the gain on 
 optimizer never saw. It runs entirely on your own machines, and works with no internet access.
 
 [![CI](https://github.com/abdullahahmed94/kaizeval/actions/workflows/ci.yml/badge.svg)](https://github.com/abdullahahmed94/kaizeval/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/kaizeval.svg)](https://pypi.org/project/kaizeval/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)
@@ -20,10 +21,12 @@ flowchart LR
     C --> D["Evaluate<br/>Baseline A"]
     D --> E["Diagnose and<br/>recommend"]
     E --> F["Patch isolated<br/>Candidate B"]
-    F --> G["Paired A/B on<br/>every round"]
-    G -->|"gate fails: roll back"| F
+    F --> G["Paired A/B on<br/>every cycle"]
+    G -->|"keep or roll back,<br/>until 3 cycles change nothing"| F
     G --> H["Sealed holdout<br/>validation"]
-    H --> I["You approve<br/>or reject"]
+    H --> I{"You decide"}
+    I -->|continue| F
+    I --> J["Release<br/>or reject"]
 ```
 
 Agents that cannot be patched safely stop after "Diagnose and recommend": you get the report and
@@ -36,7 +39,8 @@ pipeline and one optimization round are drawn step by step in [docs/WORKFLOW.md]
 flowchart TB
     subgraph CLIENTS["Clients"]
         UI["Web console"]
-        CLI["CLI and CI gate"]
+        CLI["CLI: project file,<br/>CI gate"]
+        MCP["MCP tools for<br/>coding assistants"]
         REST["Any REST client"]
     end
 
@@ -65,6 +69,7 @@ flowchart TB
 
     UI --> API
     CLI --> API
+    MCP --> API
     REST --> API
     API --> JOBS --> WORK
     WORK --> EVAL
@@ -113,7 +118,7 @@ works alongside the evaluation and tracing tools you already use.
 Requires Python 3.10+. No Docker, no API key, no account.
 
 ```bash
-pip install https://github.com/abdullahahmed94/kaizeval/releases/download/v0.2.0/kaizeval-0.2.0-py3-none-any.whl
+pip install kaizeval
 kaizeval demo
 ```
 
@@ -298,13 +303,13 @@ Action:
 | Area | What you get |
 |---|---|
 | Agents | Generic HTTP and OpenAI-compatible connectors (black box); a candidate protocol for agents that can be safely patched, with `kaizeval.agentkit` to add it to your own agent in a few lines; capability discovery with reasons |
-| Models | One gateway for eight roles (generator, reference drafter, two judges, arbiter, root cause, optimizer, spec inference); preflight; budgets; per-role usage; no silent fallback |
+| Models | Any OpenAI-compatible endpoint, local or hosted; one gateway for eight roles (generator, reference drafter, two judges, arbiter, root cause, optimizer, spec inference); preflight; adapts to endpoints that refuse optional request fields; budgets; per-role usage; no silent fallback |
 | Knowledge | PDF, DOCX, Markdown, text; versioned; every passage traceable to file, page or section and offsets |
 | Specification | From your requirements, inferred, or both; versioned; Review & Edit, Approve or Skip |
 | Tests | Written by 1 to 8 independent tester agents, each with its own angle; knowledge, citation, edge-case, multi-turn and unanswerable cases; language variants (needs a real model); import of approved Q&A; coverage report; stale-case detection when a document changes |
 | Evaluation | Deterministic-first scoring; 1 to 7 independent reviewer agents with an arbiter on disagreement; testers run in parallel; critical-failure gates; "needs human review" and "not scored" as first-class outcomes |
 | Diagnosis | Findings that separate observation from hypothesis; prioritised recommendations with a review workflow |
-| Optimization | Human-guided or autonomous; allowlisted patches on an isolated candidate; full regression each round; rollback; budgets, stagnation and cancellation; continue from the candidate after a stop |
+| Optimization | Human-guided or autonomous; allowlisted patches on an isolated candidate; full regression each cycle; rollback; stops at the target or after three unchanged cycles; budgets and cancellation; after a stop you continue from the candidate or release it |
 | Validation | Paired A/B with bootstrap confidence interval; sealed, rotatable holdout; explicit approval, promotion and rollback |
 | Operations | One-file project mode (`kaizeval init` / `run`); MCP server for coding assistants; roles (owner, editor, reviewer, viewer); audit trail; encrypted credentials; JSON and Markdown reports; REST API; CLI; GitHub Action |
 

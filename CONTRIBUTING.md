@@ -36,6 +36,10 @@ pytest
 cd web && npm run build
 ```
 
+CI also runs `pytest` with every table in PostgreSQL. To do the same locally, point
+`KAIZEVAL_DATABASE_URL` at an empty database (`postgresql+psycopg://user:pass@host:5432/db`) and
+install the `postgres` extra. The S3 tests need no service: they start a local S3 emulator.
+
 The test-suite runs in strict offline mode and fails on any non-loopback network connection. Tests
 must not need credentials, a real model or internet access. Use the fake provider or the local mock
 model server in `tests/conftest.py`.

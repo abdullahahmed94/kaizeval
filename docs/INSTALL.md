@@ -14,7 +14,7 @@ Kaizeval is self-hosted. Choose one of two ways to run it.
 Requirements: Python 3.10 or newer.
 
 ```bash
-pip install kaizeval-0.2.0-py3-none-any.whl     # the wheel attached to the GitHub release
+pip install kaizeval                            # or the wheel attached to the GitHub release
 kaizeval demo                                   # optional: full journey on the bundled sample agent
 kaizeval serve                                  # http://127.0.0.1:8000
 ```
@@ -55,7 +55,7 @@ The API container applies database migrations on start; workers wait for it. Sca
 
 > The CI workflow builds this image and starts this stack (API, worker, PostgreSQL and the sample
 > agent) on every push, then checks health, the API and the console. The functional test-suite
-> itself runs on SQLite.
+> runs on SQLite and, in a second job, with every table in PostgreSQL.
 
 ### Network-isolated deployment
 
@@ -106,8 +106,9 @@ See [`.env.example`](../.env.example) for the full list. The important ones:
 5. **Specification**: build one; review and approve it, or skip.
 6. **Datasets**: generate tests and/or import approved Q&A.
 7. **Evaluations**: run a baseline. Read the findings and recommendations.
-8. **Optimization** (only for agents that support candidates): run it, read the A/B and holdout
-   results, then approve or reject the candidate.
+8. **Optimization** (only for agents that support candidates): run it and read the A/B and holdout
+   results. When the loop stops, the run page asks for your decision: **Continue improving** from
+   the candidate, or open the candidate and approve or reject its release.
 
 ## 5. Upgrade
 

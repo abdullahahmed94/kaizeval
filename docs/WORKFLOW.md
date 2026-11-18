@@ -65,9 +65,9 @@ flowchart LR
     D -->|No| E{"Evaluation mode"}
     E -->|deterministic| N["Remaining dimensions:<br/>not scored"]
     E -->|single| J1["Judge 1"]
-    E -->|dual| J2["Judge 1 and Judge 2<br/>independent contexts"]
+    E -->|"dual, or a panel of 3 to 7"| J2["Two or more reviewers<br/>independent contexts"]
     J2 --> G{"Agree, and no doubt<br/>on a critical case?"}
-    G -->|Yes| M["Average the two"]
+    G -->|Yes| M["Average the reviewers"]
     G -->|No| R["Arbiter<br/>may ask for human review"]
     J1 --> H
     M --> H
@@ -125,7 +125,7 @@ A stop hands the decision to the owner: continue from Candidate B (both versions
 flowchart LR
     V["Viewer<br/>read results"] --> RV["Reviewer<br/>approve specs, references,<br/>recommendations and patches<br/>open the holdout (audited)"]
     RV --> ED["Editor<br/>register agents and data<br/>start runs"]
-    ED --> OW["Owner<br/>credentials and egress<br/>grant write access<br/>autonomous mode<br/>approve and promote releases"]
+    ED --> OW["Owner<br/>credentials and egress<br/>grant write access<br/>autonomous mode<br/>continue a stopped loop<br/>approve and promote releases"]
 ```
 
 Each role includes the permissions of the roles to its left.

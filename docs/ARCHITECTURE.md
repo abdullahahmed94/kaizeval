@@ -6,7 +6,7 @@ containers backed by PostgreSQL.
 
 ```mermaid
 flowchart TB
-  UI["Web console / CLI / REST clients"] --> API["API (FastAPI): auth, RBAC, workspace scoping"]
+  UI["Web console / CLI and project file / MCP tools / REST clients"] --> API["API (FastAPI): auth, RBAC, workspace scoping"]
   API --> JOBS[("jobs table")]
   JOBS --> WORKER["Worker(s)"]
   WORKER --> SPEC["specs"]
@@ -24,7 +24,7 @@ flowchart TB
     GW["LLM Gateway: role routing, preflight, budgets, metering"]
     GW --> NET1["netguard"]
     NET1 --> LOCAL["Local OpenAI-compatible server"]
-    NET1 --> BYOK["Owner-approved remote provider (connected mode only)"]
+    NET1 --> BYOK["Owner-approved hosted provider (connected mode only)"]
     GW --> FAKE["Fake provider (synthetic, in-process)"]
   end
   subgraph AGENT["Agent under test"]
