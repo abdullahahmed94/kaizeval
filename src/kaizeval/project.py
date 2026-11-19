@@ -58,6 +58,10 @@ agent:
   # api_key_env: MY_AGENT_API_KEY
   # candidate_protocol: true        # the agent implements the candidate admin API (enables auto-optimization)
   # admin_token_env: MY_AGENT_ADMIN_TOKEN
+  #
+  # An agent hosted on a cloud platform is named by 'platform' instead of 'url' (it needs
+  # 'network: connected' above and 'allow_public: true' here). See docs/CLOUD_PLATFORMS.md.
+  # platform: aws_bedrock_agent | aws_agentcore | salesforce_agentforce
 
 # --- 3. What the agent is supposed to do, and what it should know -------------------------
 requirements: |
@@ -105,7 +109,19 @@ DEFAULTS: dict[str, Any] = {
     "optimize": {"enabled": False, "max_rounds": None, "stagnation_rounds": 3},
 }
 
-MODEL_KEYS = {"kind", "base_url", "model", "allow_public", "api_key_env", "params", "max_tokens", "temperature", "timeout_s"}
+MODEL_KEYS = {"kind", "base_url", "model", "allow_public", "api_key_env", "params", "max_tokens", "temperature", "timeout_s",
+              "region"}
+# Agents hosted on a cloud platform: the settings each one needs, and the ones it accepts.
+PLATFORMS: dict[str, tuple[set[str], set[str]]] = {
+    "aws_bedrock_agent": ({"agent_id", "agent_alias_id", "region"}, {"access_key_id", "endpoint_url", "extra_body"}),
+    "aws_agentcore": ({"agent_runtime_arn"}, {"region", "qualifier", "message_field", "response_path", "citations_path",
+                                              "access_key_id", "endpoint_url", "extra_body"}),
+    "salesforce_agentforce": ({"my_domain", "agent_id"}, {"client_id", "client_id_env", "bypass_user", "variables",
+                                                          "api_base", "token_url"}),
+}
+PLATFORM_COMMON = {"platform", "credential_env", "timeout_s", "cost_per_call", "allow_public"}
+
+SUPPORTED = {".pdf", ".docx", ".md", ".markdown", ".txt"}  # same list as kaizeval.documents
 
 Log = Callable[[str], None]
 
@@ -146,8 +162,26 @@ def load_config(path: Path) -> dict[str, Any]:
                 raise ProjectError(f"unknown setting(s) under '{key}': {', '.join(extra)}")
             value = {**default, **(value or {})}
         config[key] = value
-    if not (config["agent"] or {}).get("url"):
-        raise ProjectError("agent.url is required: the HTTP endpoint of the agent you want to test")
+    agent = config["agent"] or {}
+    platform = agent.get("platform")
+    if platform:
+        if platform not in PLATFORMS:
+            raise ProjectError(f"agent.platform must be one of: {', '.join(sorted(PLATFORMS))}")
+        required, optional = PLATFORMS[platform]
+        missing = sorted(key for key in required if not agent.get(key))
+        if platform == "salesforce_agentforce" and not (agent.get("client_id") or agent.get("client_id_env")):
+            missing.append("client_id (or client_id_env)")
+        if missing:
+            raise ProjectError(f"agent.platform '{platform}' also needs: {', '.join(missing)}")
+        unknown = sorted(set(agent) - required - optional - PLATFORM_COMMON)
+        if unknown:
+            raise ProjectError(f"unknown setting(s) under 'agent' for platform '{platform}': {', '.join(unknown)}")
+        if config.get("network") != "connected" and not agent.get("endpoint_url") and not agent.get("api_base"):
+            raise ProjectError(f"agent.platform '{platform}' is a hosted service: set 'network: connected' "
+                               "and 'allow_public: true' under 'agent'")
+    elif not agent.get("url"):
+        raise ProjectError("agent.url is required: the HTTP endpoint of the agent you want to test "
+                           "(or set agent.platform for an agent hosted on AWS or Salesforce)")
     if config["network"] not in ("offline", "connected"):
         raise ProjectError("network must be 'offline' or 'connected'")
     if isinstance(config["knowledge"], str):
@@ -317,7 +351,8 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
             provider = api.call("POST", f"{base}/model-providers", json={
                 "name": f"{config['project']} model", "kind": kind, "base_url": model.get("base_url"),
                 "default_model": model.get("model", ""), "allow_egress": bool(model.get("allow_public")),
-                "api_key": _secret(model.get("api_key_env"), "model.api_key_env"), "params": model.get("params") or {}})
+                "api_key": _secret(model.get("api_key_env"), "model.api_key_env"),
+                "params": {**(model.get("params") or {}), **({"region": model["region"]} if model.get("region") else {})}})
 
             state["provider"] = {"id": provider["id"], "fingerprint": fingerprint}
         provider_id = state["provider"]["id"]
@@ -341,7 +376,14 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
     fingerprint = _fingerprint(agent_cfg)
     if (state.get("agent") or {}).get("fingerprint") != fingerprint:
         candidate_protocol = bool(agent_cfg.get("candidate_protocol"))
-        if candidate_protocol:
+        if agent_cfg.get("platform"):
+            skip = {"platform", "credential_env", "client_id_env"}
+            settings = {k: v for k, v in agent_cfg.items() if k not in skip and v is not None}
+            if agent_cfg.get("client_id_env"):
+                settings["client_id"] = _secret(agent_cfg["client_id_env"], "agent.client_id_env")
+            body = {"adapter": agent_cfg["platform"], "config": settings,
+                    "credential": _secret(agent_cfg.get("credential_env"), "agent.credential_env")}
+        elif candidate_protocol:
             body = {"adapter": "local_config", "config": {"base_url": agent_cfg["url"]},
                     "credential": _secret(agent_cfg.get("admin_token_env"), "agent.admin_token_env"),
                     "access_level": "candidate_write", "allow_promote": True}
@@ -362,7 +404,18 @@ def _run(engine: Engine, config: dict[str, Any], root: Path, *, holdout: bool, r
     # 4. knowledge, requirements and instructions
     files: list[Path] = []
     for pattern in config["knowledge"] or []:
-        files.extend(Path(p) for p in sorted(glob.glob(str(root / pattern), recursive=True)) if Path(p).is_file())
+        matched = [Path(p) for p in sorted(glob.glob(str(root / pattern), recursive=True))]
+        found: list[Path] = []
+        for path in matched:
+            if path.is_dir():
+                # a folder means every supported document inside it
+                found.extend(sorted(f for f in path.rglob("*") if f.is_file() and f.suffix.lower() in SUPPORTED))
+            elif path.is_file():
+                found.append(path)
+        if not found:
+            raise ProjectError(f"knowledge: '{pattern}' matches no document. Give a file, a folder or a pattern such as "
+                               f"docs/**/*.md (supported: PDF, DOCX, Markdown, TXT)")
+        files.extend(f for f in found if f not in files)
     shas = []
     for path in files:
         document = api.call("POST", f"{base}/documents", files={"file": (path.name, path.read_bytes())}, data={"kind": "kb"})

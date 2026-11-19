@@ -93,6 +93,12 @@ register_adapter("my_adapter", MyAdapter, {
 
 ## Bundled adapters
 
+Besides the two generic adapters below, three adapters for hosted platforms are bundled:
+`aws_bedrock_agent`, `aws_agentcore` and `salesforce_agentforce`. They are black-box and are
+described in [CLOUD_PLATFORMS.md](CLOUD_PLATFORMS.md). A hosted-platform adapter declares
+`config_error(config)` and `endpoints(config)` so that registration can validate its settings
+and check every address it will call against the network policy.
+
 ### `http_chat`: generic HTTP chat endpoint (black box)
 
 Capabilities: `invoke` only.

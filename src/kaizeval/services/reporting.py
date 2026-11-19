@@ -172,9 +172,13 @@ def to_markdown(report: dict[str, Any]) -> str:
 
     if report["type"] == "evaluation":
         table(report.get("result"), f"Result ({report.get('split')} set)")
+        if report.get("recommendations"):
+            lines += ["## Recommendations", ""]
         for rec in report.get("recommendations") or []:
             lines.append(f"- **{rec['title']}** ({rec['category']}, risk {rec['risk']}, "
                          f"{rec['impact'].get('cases_affected')} case(s)) [{rec['state']}]")
+        if report.get("recommendations"):
+            lines.append("")
     else:
         lines += [f"Status: **{report['status']}**. Stop reason: {report.get('stop_reason') or 'n/a'}. "
                   f"Rounds: {report.get('rounds')}.", ""]

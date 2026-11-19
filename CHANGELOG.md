@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0]
+
+### Added
+- Cloud platforms ([docs/CLOUD_PLATFORMS.md](docs/CLOUD_PLATFORMS.md)):
+  - Amazon Bedrock as a model provider (`kind: aws_bedrock`, the Converse API).
+  - Black-box agent connectors for Amazon Bedrock agents (`aws_bedrock_agent`), Amazon Bedrock
+    AgentCore Runtime (`aws_agentcore`) and Salesforce Agentforce (`salesforce_agentforce`).
+  - `agent.platform` and `model.region` in the project file; the console forms for adding a
+    model and registering an agent offer the new kinds, and agents can be marked as being on a
+    public address.
+  - No AWS or Salesforce SDK is required: requests are signed in-process and go through the
+    same network policy as every other endpoint.
+- A narrated demo video of the console, linked from the README.
+- `agent.client_id_env` in the project file, so the Agentforce consumer key can stay out of the file.
+
+### Changed
+- `knowledge:` in the project file accepts a folder (every supported document inside it), and a
+  pattern that matches no document is an error instead of being skipped silently.
+- An unreachable host fails within 15 seconds with "cannot connect to <host>" instead of waiting
+  for the whole answer timeout and reporting that the agent did not answer.
+- The evaluation report has a "Recommendations" heading.
+
 ## [0.2.0]
 
 ### Added

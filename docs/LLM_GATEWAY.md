@@ -34,6 +34,13 @@ but does not remove, correlated errors; agreement between two judges is not grou
 
 ## Providers
 
+### Amazon Bedrock (`kind: "aws_bedrock"`)
+
+Calls the Bedrock `Converse` API directly, signed with your AWS credentials; no AWS SDK is
+installed. It needs `params.region` and a model id or inference profile id as the default model.
+Credentials, permissions and a project-file example are in
+[CLOUD_PLATFORMS.md](CLOUD_PLATFORMS.md).
+
 ### OpenAI-compatible endpoint (`kind: "openai_compatible"`)
 
 Any server that implements `POST {base_url}/chat/completions`. This covers local servers such as

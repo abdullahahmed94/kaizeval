@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .. import audit
+from ..aws import REGION
 from ..connectors import (
     ADAPTER_INFO,
     ADAPTERS,
@@ -61,12 +62,21 @@ def _store_secret(ctx: Ctx, name: str, value: str | None) -> str | None:
 def create_provider(body: ProviderCreate, ctx: Ctx = Depends(workspace_ctx("owner"))) -> dict[str, Any]:
     if body.kind not in PROVIDER_KINDS:
         raise fail(422, "UNKNOWN_PROVIDER_KIND", f"kind must be one of {PROVIDER_KINDS}")
-    if body.kind == "openai_compatible":
-        if not body.base_url:
+    if body.kind in ("openai_compatible", "aws_bedrock"):
+        if body.kind == "aws_bedrock":
+            region = str(body.params.get("region") or "")
+            if not body.base_url and not REGION.match(region):
+                raise fail(422, "REGION_REQUIRED", "an Amazon Bedrock provider needs params.region, for example 'us-east-1'")
+            if not body.default_model:
+                raise fail(422, "MODEL_REQUIRED", "an Amazon Bedrock provider needs a model id or inference profile id")
+            target = body.base_url or f"https://bedrock-runtime.{region}.amazonaws.com"
+        elif not body.base_url:
             raise fail(422, "BASE_URL_REQUIRED", "an OpenAI-compatible provider needs a base URL, "
                        "for example http://localhost:11434/v1")
+        else:
+            target = body.base_url
         try:
-            check_url(body.base_url, egress_policy(ctx.workspace, allow_public=body.allow_egress))
+            check_url(target, egress_policy(ctx.workspace, allow_public=body.allow_egress))
         except EgressBlocked as exc:
             raise fail(409, "EGRESS_BLOCKED", f"{exc.reason}. Offline workspaces accept only local or allowlisted "
                        "model endpoints; a connected workspace must also set allow_egress for public providers.") from exc
@@ -196,11 +206,20 @@ def _check_agent(ctx: Ctx, adapter: str, config: dict[str, Any], access_level: s
     if LEVELS.index(access_level) > LEVELS.index(maximum):
         raise fail(409, "UNSUPPORTED_CAPABILITY", f"the '{adapter}' adapter supports at most '{maximum}' access. "
                    "Evaluation and recommendations remain available.")
-    url = config.get("url") or config.get("base_url")
-    if not url:
-        raise fail(422, "URL_REQUIRED", "the agent configuration needs 'url' (http_chat) or 'base_url' (local_config)")
+    cls: Any = ADAPTERS[adapter]
+    if hasattr(cls, "config_error"):
+        # A hosted platform: the addresses follow from its settings (region, org domain, ...).
+        problem = cls.config_error(config)
+        if problem:
+            raise fail(422, "AGENT_CONFIG_INCOMPLETE", problem)
+        urls = cls.endpoints(config)
+    else:
+        urls = [config.get("url") or config.get("base_url")]
+        if not urls[0]:
+            raise fail(422, "URL_REQUIRED", "the agent configuration needs 'url' (http_chat) or 'base_url' (local_config)")
     try:
-        check_url(url, egress_policy(ctx.workspace, allow_public=bool(config.get("allow_public"))))
+        for url in urls:
+            check_url(url, egress_policy(ctx.workspace, allow_public=bool(config.get("allow_public"))))
     except EgressBlocked as exc:
         raise fail(409, "EGRESS_BLOCKED", f"{exc.reason}. Offline workspaces can only reach local or allowlisted agents.") from exc
 

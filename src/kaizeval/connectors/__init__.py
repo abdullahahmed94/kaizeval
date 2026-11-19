@@ -18,10 +18,14 @@ from .base import (
     effective_capabilities,
     render_diff,
 )
+from .cloud import AgentCoreAdapter, AgentforceAdapter, BedrockAgentAdapter
 from .http_chat import HttpChatAdapter
 from .local_config import LocalConfigAdapter
 
-ADAPTERS: dict[str, type] = {"http_chat": HttpChatAdapter, "local_config": LocalConfigAdapter}
+ADAPTERS: dict[str, type] = {
+    "http_chat": HttpChatAdapter, "local_config": LocalConfigAdapter, "aws_bedrock_agent": BedrockAgentAdapter,
+    "aws_agentcore": AgentCoreAdapter, "salesforce_agentforce": AgentforceAdapter,
+}
 
 ADAPTER_INFO: dict[str, dict[str, Any]] = {
     "http_chat": {
@@ -35,6 +39,25 @@ ADAPTER_INFO: dict[str, dict[str, Any]] = {
         "description": "Agents that implement the Kaizeval admin protocol (the bundled sample agent does). "
                        "Supports an isolated candidate copy, allowlisted patches, restore and approved promotion.",
         "max_access_level": "candidate_write",
+    },
+    "aws_bedrock_agent": {
+        "label": "Amazon Bedrock agent",
+        "description": "An agent built with Amazon Bedrock Agents, called through InvokeAgent with your AWS "
+                       "credentials. Black-box: evaluation and recommendations; knowledge-base citations are read "
+                       "from the answer.",
+        "max_access_level": "black_box",
+    },
+    "aws_agentcore": {
+        "label": "Amazon Bedrock AgentCore agent",
+        "description": "An agent hosted on Amazon Bedrock AgentCore Runtime, called through InvokeAgentRuntime "
+                       "with your AWS credentials. Black-box: evaluation and recommendations.",
+        "max_access_level": "black_box",
+    },
+    "salesforce_agentforce": {
+        "label": "Salesforce Agentforce agent",
+        "description": "An Agentforce agent, called through the Agent API with the consumer key and secret of a "
+                       "connected app. Black-box: evaluation and recommendations.",
+        "max_access_level": "black_box",
     },
 }
 

@@ -159,7 +159,9 @@ never continues by itself and never promotes.
 | `model.api_key_env` | none | Name of the environment variable that holds the API key (the key itself never goes in the file) |
 | `model.allow_public` | `false` | Needed for a hosted provider, together with `network: connected` |
 | `model.max_tokens`, `model.temperature`, `model.timeout_s` | `2000`, `0`, `300` | Output limit, temperature and timeout of every model call. Raise `max_tokens` for models that reason before answering |
-| `model.kind` | `openai_compatible` | `fake` selects the built-in deterministic stand-in (results are SYNTHETIC) |
+| `knowledge` | none | Files, folders or patterns such as `docs/**/*.md`. A folder means every PDF, DOCX, Markdown and TXT file inside it |
+| `model.kind` | `openai_compatible` | `fake` selects the built-in deterministic stand-in (results are SYNTHETIC). `aws_bedrock` uses Amazon Bedrock and needs `model.region` ([cloud platforms](CLOUD_PLATFORMS.md)) |
+| `agent.platform` | none | Instead of `agent.url`, for an agent hosted on a cloud platform: `aws_bedrock_agent`, `aws_agentcore` or `salesforce_agentforce`. Its settings and `agent.credential_env` are listed in [cloud platforms](CLOUD_PLATFORMS.md) |
 | `agent.url` | required | HTTP endpoint of the agent |
 | `agent.style` | `simple` | `simple` (`{"message": ...}` → `{"answer": ...}`) or `openai` (chat completions) |
 | `agent.response_path`, `agent.citations_path` | `answer`, `citations` | Where the answer and citations are in the response JSON |

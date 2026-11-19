@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+CONNECT_TIMEOUT_S = 15.0
+
 
 class EgressBlocked(Exception):
     """Raised when a destination violates the network policy."""
@@ -100,7 +102,8 @@ def guarded_client(policy: EgressPolicy, *, timeout: float = 30.0, headers: dict
         check_url(str(request.url), policy)
 
     return httpx.Client(
-        timeout=timeout,
+        # An unreachable host should fail in seconds, not after the whole answer timeout.
+        timeout=httpx.Timeout(timeout, connect=min(timeout, CONNECT_TIMEOUT_S)),
         headers=headers,
         follow_redirects=False,
         trust_env=False,  # ignore HTTP(S)_PROXY so traffic cannot be silently re-routed

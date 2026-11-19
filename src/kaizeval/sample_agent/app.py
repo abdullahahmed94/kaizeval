@@ -152,7 +152,7 @@ def answer(kb: KnowledgeBase, state: AgentState, message: str, config: dict[str,
 
 def create_sample_agent(*, admin_token: str | None = None, state_file: Path | None = None,
                         kb_dir: Path | None = None, delay_seconds: float = 0.0) -> FastAPI:
-    app = FastAPI(title="Kaizeval sample agent", version="0.2.0",
+    app = FastAPI(title="Kaizeval sample agent", version="0.3.0",
                   description="Deterministic demo agent. Not a language model.")
     kb = KnowledgeBase(kb_dir or KB_DIR)
     store = CandidateStore(

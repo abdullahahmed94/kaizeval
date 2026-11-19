@@ -52,9 +52,11 @@ function ProviderRow({ provider, onChanged }: { provider: Provider; onChanged: (
           <p className="muted small">
             {provider.kind === "fake" ? FAKE_LABEL : (
               <>
-                OpenAI-compatible endpoint <code>{provider.base_url}</code>
+                {provider.kind === "aws_bedrock"
+                  ? <>Amazon Bedrock{provider.params?.region ? `, region ${String(provider.params.region)}` : ""}{provider.base_url ? <> at <code>{provider.base_url}</code></> : null}</>
+                  : <>OpenAI-compatible endpoint <code>{provider.base_url}</code></>}
                 {provider.default_model ? `, default model ${provider.default_model}` : ""}
-                {provider.has_credential ? ", API key stored" : ", no API key"}
+                {provider.has_credential ? ", credential stored" : ", no stored credential"}
                 {provider.allow_egress ? ", public endpoint allowed" : ""}
               </>
             )}
@@ -113,14 +115,16 @@ function AddProvider({ kinds, onCreated }: { kinds: string[]; onCreated: () => v
   const [defaultModel, setDefaultModel] = useState("");
   const [allowEgress, setAllowEgress] = useState(false);
   const [params, setParams] = useState("");
+  const [region, setRegion] = useState("");
   const [paramsError, setParamsError] = useState<string | null>(null);
   const action = useAction();
+  const bedrock = kind === "aws_bedrock";
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     let parsed: Dict = {};
     setParamsError(null);
-    if (kind === "openai_compatible" && params.trim()) {
+    if (kind !== "fake" && params.trim()) {
       try {
         const value: unknown = JSON.parse(params);
         if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("not an object");
@@ -135,11 +139,12 @@ function AddProvider({ kinds, onCreated }: { kinds: string[]; onCreated: () => v
         kind === "fake"
           ? { name: name.trim(), kind }
           : {
-              name: name.trim(), kind, base_url: baseUrl.trim(), api_key: apiKey || null,
-              default_model: defaultModel.trim(), allow_egress: allowEgress, params: parsed,
+              name: name.trim(), kind, base_url: baseUrl.trim() || null, api_key: apiKey || null,
+              default_model: defaultModel.trim(), allow_egress: allowEgress,
+              params: bedrock ? { ...parsed, region: region.trim() } : parsed,
             },
       );
-      setName(""); setBaseUrl(""); setApiKey(""); setDefaultModel(""); setAllowEgress(false); setParams("");
+      setName(""); setBaseUrl(""); setApiKey(""); setDefaultModel(""); setAllowEgress(false); setParams(""); setRegion("");
       onCreated();
     });
   };
@@ -152,7 +157,8 @@ function AddProvider({ kinds, onCreated }: { kinds: string[]; onCreated: () => v
             <select value={kind} onChange={(event) => setKind(event.target.value)}>
               {kinds.map((item) => (
                 <option key={item} value={item}>
-                  {item === "fake" ? FAKE_LABEL : item === "openai_compatible" ? "OpenAI-compatible endpoint" : item}
+                  {item === "fake" ? FAKE_LABEL : item === "openai_compatible" ? "OpenAI-compatible endpoint"
+                    : item === "aws_bedrock" ? "Amazon Bedrock" : item}
                 </option>
               ))}
             </select>
@@ -170,17 +176,36 @@ function AddProvider({ kinds, onCreated }: { kinds: string[]; onCreated: () => v
           </Notice>
         ) : (
           <>
-            <div className="form-grid">
-              <Field label="Base URL" hint="For example http://localhost:11434/v1">
-                <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required maxLength={500} />
-              </Field>
-              <Field label="API key (optional)" hint="Stored encrypted; it is never shown again.">
-                <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
-              </Field>
-              <Field label="Default model" hint="Model name sent to the endpoint when a role does not set its own.">
-                <input type="text" value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} maxLength={200} />
-              </Field>
-            </div>
+            {bedrock ? (
+              <div className="form-grid">
+                <Field label="Region" hint="The AWS Region where the model is enabled, for example us-east-1.">
+                  <input type="text" value={region} onChange={(event) => setRegion(event.target.value)} required maxLength={30}
+                    pattern="[a-z]{2}(-[a-z]+)+-[0-9]{1,2}" />
+                </Field>
+                <Field label="Model" hint="A model id or an inference profile id, exactly as Amazon Bedrock lists it.">
+                  <input type="text" value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} required maxLength={200} />
+                </Field>
+                <Field label="AWS credential"
+                  hint="ACCESS_KEY_ID:SECRET_ACCESS_KEY (add :SESSION_TOKEN for temporary credentials), or a Bedrock API key. Stored encrypted; never shown again. Leave empty to use the AWS environment variables of the Kaizeval server.">
+                  <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
+                </Field>
+                <Field label="Endpoint URL (optional)" hint="Only for a private (VPC) endpoint. Empty uses the public endpoint of the Region.">
+                  <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} maxLength={500} />
+                </Field>
+              </div>
+            ) : (
+              <div className="form-grid">
+                <Field label="Base URL" hint="For example http://localhost:11434/v1">
+                  <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required maxLength={500} />
+                </Field>
+                <Field label="API key (optional)" hint="Stored encrypted; it is never shown again.">
+                  <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
+                </Field>
+                <Field label="Default model" hint="Model name sent to the endpoint when a role does not set its own.">
+                  <input type="text" value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} maxLength={200} />
+                </Field>
+              </div>
+            )}
             <Check label="Allow sending data to a public endpoint" checked={allowEgress} onChange={setAllowEgress} />
             {allowEgress && (
               <Notice tone="warn" title="Workspace content will leave your network">

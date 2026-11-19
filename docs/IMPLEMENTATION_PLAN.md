@@ -1,6 +1,6 @@
 # Implementation plan and status
 
-Status of release 0.2.0 against the product blueprint. For per-criterion evidence see
+Status of release 0.3.0 against the product blueprint. For per-criterion evidence see
 [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md).
 
 ## Starting point

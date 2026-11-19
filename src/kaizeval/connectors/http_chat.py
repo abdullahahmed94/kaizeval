@@ -96,6 +96,8 @@ class HttpChatAdapter(AgentAdapter):
             response = self._http().post(self.url, json=body)
         except EgressBlocked as exc:
             raise AdapterError("EGRESS_BLOCKED", exc.reason) from exc
+        except httpx.ConnectTimeout as exc:
+            raise AdapterError("CONNECTION_ERROR", "cannot connect to the agent: check its address and the network") from exc
         except httpx.TimeoutException as exc:
             raise AdapterError("TIMEOUT", f"agent did not answer within {self.timeout}s") from exc
         except httpx.HTTPError as exc:

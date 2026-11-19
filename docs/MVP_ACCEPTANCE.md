@@ -1,4 +1,4 @@
-# Acceptance status for release 0.2.0
+# Acceptance status for release 0.3.0
 
 This page states, criterion by criterion, what is demonstrated by automated tests, what was only
 checked by hand, and what is not done. Run the evidence yourself:

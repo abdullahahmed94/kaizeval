@@ -14,6 +14,40 @@ const LEVEL_LABELS: Record<AccessLevel, string> = {
   candidate_write: "Candidate write (patch an isolated candidate copy)",
 };
 
+type CloudField = { key: string; label: string; hint: string; optional?: boolean };
+
+// Agents hosted on a cloud platform: the settings the platform needs, and what its credential is.
+const CLOUD: Record<string, { fields: CloudField[]; credential: string; credentialHint: string }> = {
+  aws_bedrock_agent: {
+    fields: [
+      { key: "region", label: "Region", hint: "The AWS Region of the agent, for example us-east-1." },
+      { key: "agent_id", label: "Agent ID", hint: "The ten-character id shown on the agent page." },
+      { key: "agent_alias_id", label: "Agent alias ID", hint: "The alias to test. TSTALIASID is the working draft." },
+    ],
+    credential: "AWS credential",
+    credentialHint: "ACCESS_KEY_ID:SECRET_ACCESS_KEY (add :SESSION_TOKEN for temporary credentials). It needs permission for bedrock:InvokeAgent. Stored encrypted; never shown again.",
+  },
+  aws_agentcore: {
+    fields: [
+      { key: "agent_runtime_arn", label: "Agent runtime ARN", hint: "The ARN of the AgentCore runtime. The Region is read from it." },
+      { key: "qualifier", label: "Endpoint (optional)", hint: "The runtime endpoint name. Default: DEFAULT.", optional: true },
+      { key: "message_field", label: "Message field (optional)", hint: "The JSON field your agent reads the question from. Default: prompt.", optional: true },
+      { key: "response_path", label: "Response path (optional)", hint: "Dotted path to the answer text in the reply of your agent. Empty tries the usual field names.", optional: true },
+    ],
+    credential: "AWS credential",
+    credentialHint: "ACCESS_KEY_ID:SECRET_ACCESS_KEY (add :SESSION_TOKEN for temporary credentials). It needs permission for bedrock-agentcore:InvokeAgentRuntime. Stored encrypted; never shown again.",
+  },
+  salesforce_agentforce: {
+    fields: [
+      { key: "my_domain", label: "My Domain URL", hint: "For example https://yourcompany.my.salesforce.com" },
+      { key: "agent_id", label: "Agent ID", hint: "The 18-character id at the end of the agent's URL in Setup (starts with 0Xx)." },
+      { key: "client_id", label: "Consumer key", hint: "From the connected app that has the client credentials flow enabled." },
+    ],
+    credential: "Consumer secret",
+    credentialHint: "The consumer secret of the same connected app. Stored encrypted; never shown again.",
+  },
+};
+
 function RegisterAgent({ adapters }: { adapters: AdaptersResponse }) {
   const { api, can } = useSession();
   const navigate = useNavigate();
@@ -28,7 +62,10 @@ function RegisterAgent({ adapters }: { adapters: AdaptersResponse }) {
   const [costPerCall, setCostPerCall] = useState("");
   const [accessLevel, setAccessLevel] = useState<AccessLevel>("black_box");
   const [allowPromote, setAllowPromote] = useState(false);
+  const [cloudValues, setCloudValues] = useState<Record<string, string>>({});
+  const [allowPublic, setAllowPublic] = useState(false);
   const action = useAction();
+  const cloud = CLOUD[adapter];
 
   const info = adapters.adapters[adapter];
   const maxLevel = info ? LEVELS.indexOf(info.max_access_level) : 0;
@@ -46,7 +83,12 @@ function RegisterAgent({ adapters }: { adapters: AdaptersResponse }) {
     event.preventDefault();
     const config: Dict = {};
     const cost = parseOptionalNumber(costPerCall);
-    if (adapter === "local_config") {
+    if (cloud) {
+      for (const field of cloud.fields) {
+        const value = (cloudValues[field.key] ?? "").trim();
+        if (value) config[field.key] = value;
+      }
+    } else if (adapter === "local_config") {
       config.base_url = url.trim();
     } else {
       config.url = url.trim();
@@ -55,6 +97,7 @@ function RegisterAgent({ adapters }: { adapters: AdaptersResponse }) {
       if (citationsPath.trim()) config.citations_path = citationsPath.trim();
     }
     if (cost !== null) config.cost_per_call = cost;
+    if (allowPublic && adapter !== "local_config") config.allow_public = true;
     void action.run(async () => {
       const created = await api.createAgent({
         name: name.trim(), adapter, config, credential: credential || null,
@@ -86,7 +129,22 @@ function RegisterAgent({ adapters }: { adapters: AdaptersResponse }) {
           </Notice>
         )}
 
-        {adapter === "local_config" ? (
+        {cloud ? (
+          <div className="form-grid">
+            {cloud.fields.map((field) => (
+              <Field key={field.key} label={field.label} hint={field.hint}>
+                <input type="text" value={cloudValues[field.key] ?? ""} required={!field.optional} maxLength={500}
+                  onChange={(event) => setCloudValues({ ...cloudValues, [field.key]: event.target.value })} />
+              </Field>
+            ))}
+            <Field label={cloud.credential} hint={cloud.credentialHint}>
+              <input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} autoComplete="off" />
+            </Field>
+            <Field label="Cost per call (optional)" hint="Your own estimate, used only to report target agent cost.">
+              <input type="number" value={costPerCall} min={0} step="any" onChange={(event) => setCostPerCall(event.target.value)} />
+            </Field>
+          </div>
+        ) : adapter === "local_config" ? (
           <div className="form-grid">
             <Field label="Base URL" hint="Root address of the agent, for example http://127.0.0.1:8101">
               <input type="url" value={url} onChange={(event) => setUrl(event.target.value)} required />
@@ -126,6 +184,21 @@ function RegisterAgent({ adapters }: { adapters: AdaptersResponse }) {
           </div>
         )}
 
+        {adapter !== "local_config" && (
+          <Check label="This agent is on a public address" checked={allowPublic} onChange={setAllowPublic}
+            hint={cloud
+              ? "Required for a hosted platform. Test questions are sent to it over the internet, and the workspace must be in connected mode."
+              : "Tick it when the agent is not on your local network. The workspace must be in connected mode."} />
+        )}
+        {cloud && (
+          <Notice tone="warn" title="Tests are real conversations with the deployed agent">
+            <p>
+              Every test case opens a session with this agent on the platform. If the agent can take actions
+              (create a case, issue a refund, send an email), those actions really happen, and the platform bills
+              the usage. Point Kaizeval at a sandbox or a test agent before you run a large test set.
+            </p>
+          </Notice>
+        )}
         <Field label="Access level" hint={`Grants: ${(adapters.access_levels[accessLevel] ?? []).map(humanize).join(", ") || "—"}.`}>
           <select value={accessLevel} onChange={(event) => setAccessLevel(event.target.value as AccessLevel)}>
             {LEVELS.map((level, index) => (

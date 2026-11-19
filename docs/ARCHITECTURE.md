@@ -48,7 +48,8 @@ flowchart TB
 | `jobs`, `handlers` | Database-backed job queue and the job handlers |
 | `storage` | Object storage abstraction (filesystem, S3-compatible) |
 | `gateway` | LLM Gateway: providers, prompts, output schemas, the fake provider |
-| `connectors` | `AgentAdapter` contract, `http_chat` and `local_config` adapters, registry |
+| `connectors` | `AgentAdapter` contract, `http_chat` and `local_config` adapters, hosted-platform adapters (Amazon Bedrock agents, AgentCore, Salesforce Agentforce), registry |
+| `aws` | Request signing (Signature Version 4), credential parsing and event-stream decoding for the AWS integrations |
 | `documents`, `ground_truth` | Parsing and chunking; `GroundTruthProvider` contract and the document provider |
 | `services.specs` | Versioned specifications |
 | `services.datasets` | Test generation, import, split, coverage, holdout access control |

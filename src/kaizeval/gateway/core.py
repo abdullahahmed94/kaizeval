@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..aws import REGION, canonical_path, parse_credentials, sign
 from ..config import get_settings
 from ..models import ModelInvocation, ModelProvider, ModelRolePolicy, Secret, Workspace, utcnow
 from ..netguard import EgressBlocked, EgressPolicy, check_url, guarded_client
@@ -30,7 +31,7 @@ ROLES = [
     "specification_inference", "test_generator", "reference_draft", "evaluator_primary",
     "evaluator_secondary", "arbiter", "root_cause", "optimizer",
 ]
-PROVIDER_KINDS = ["fake", "openai_compatible"]
+PROVIDER_KINDS = ["fake", "openai_compatible", "aws_bedrock"]
 
 T = TypeVar("T", bound=BaseModel)
 _semaphores: dict[str, threading.BoundedSemaphore] = {}
@@ -156,6 +157,88 @@ def _openai_complete(provider: ModelProvider, api_key: str | None, policy: Egres
     completion_tokens = usage.get("completion_tokens") or _estimate_tokens(text)
     return Completion(text, int(prompt_tokens), int(completion_tokens), estimated, latency, data.get("model") or model,
                       truncated=truncated)
+
+
+def bedrock_url(provider: ModelProvider) -> str:
+    """The Amazon Bedrock runtime endpoint of a provider: an explicit base URL, or the regional one."""
+    if provider.base_url:
+        return provider.base_url.rstrip("/")
+    region = str((provider.params or {}).get("region") or "")
+    if not REGION.match(region):
+        raise GatewayError("MODEL_NOT_CONFIGURED", "an Amazon Bedrock provider needs params.region, for example 'us-east-1'")
+    return f"https://bedrock-runtime.{region}.amazonaws.com"
+
+
+def _bedrock_complete(provider: ModelProvider, secret: str | None, policy: EgressPolicy, *, model: str,
+                      messages: list[dict[str, str]], temperature: float, max_tokens: int, timeout: float) -> Completion:
+    """One call to the Amazon Bedrock Converse API, signed here and sent through the guarded client."""
+    params = provider.params or {}
+    credentials = parse_credentials(secret, access_key_id=str(params.get("access_key_id") or ""))
+    if not credentials.usable:
+        raise GatewayError("AUTH", "no AWS credentials: store an access key pair or a Bedrock API key for this provider, "
+                           "or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the Kaizeval process")
+    url = f"{bedrock_url(provider)}{canonical_path(f'/model/{model}/converse')}"
+    # Converse takes the system text separately and wants user and assistant turns to alternate.
+    system = [{"text": m["content"]} for m in messages if m["role"] == "system"]
+    turns: list[dict[str, Any]] = []
+    for message in messages:
+        if message["role"] == "system":
+            continue
+        role = "assistant" if message["role"] == "assistant" else "user"
+        if turns and turns[-1]["role"] == role:
+            turns[-1]["content"].append({"text": message["content"]})
+        else:
+            turns.append({"role": role, "content": [{"text": message["content"]}]})
+    refused = _refused_fields.setdefault(provider.id, set())
+    inference: dict[str, Any] = {"maxTokens": max_tokens}
+    if params.get("send_temperature", True) and "temperature" not in refused:
+        inference["temperature"] = temperature
+    body: dict[str, Any] = {"messages": turns, "inferenceConfig": inference}
+    if system:
+        body["system"] = system
+    region = str(params.get("region") or "us-east-1")
+
+    def send(client: httpx.Client) -> httpx.Response:
+        raw = json.dumps(body).encode()
+        return client.post(url, content=raw, headers=sign("POST", url, raw, credentials, region=region, service="bedrock",
+                                                          headers={"content-type": "application/json"}))
+
+    started = time.perf_counter()
+    try:
+        with guarded_client(policy, timeout=timeout) as client:
+            response = send(client)
+            if response.status_code == 400 and "temperature" in inference and "temperature" in response.text.lower():
+                del inference["temperature"]
+                response = send(client)
+                if response.status_code < 400:
+                    refused.add("temperature")
+    except EgressBlocked as exc:
+        raise GatewayError("EGRESS_BLOCKED", exc.reason) from exc
+    except httpx.TimeoutException as exc:
+        raise GatewayError("TIMEOUT", f"Amazon Bedrock did not answer within {timeout}s", retryable=True) from exc
+    except httpx.HTTPError as exc:
+        raise GatewayError("CONNECTION", f"cannot reach Amazon Bedrock ({type(exc).__name__})", retryable=True) from exc
+    latency = int((time.perf_counter() - started) * 1000)
+    if response.status_code in (401, 403):
+        raise GatewayError("AUTH", f"Amazon Bedrock rejected the credentials or the model access (HTTP {response.status_code}): "
+                           f"{redact(response.text[:300])}")
+    if response.status_code == 429:
+        raise GatewayError("RATE_LIMITED", "Amazon Bedrock throttled the request", retryable=True)
+    if response.status_code >= 500 or response.status_code in (408, 424):
+        raise GatewayError("PROVIDER_ERROR", f"Amazon Bedrock failed (HTTP {response.status_code})", retryable=True)
+    if response.status_code >= 400:
+        raise GatewayError("BAD_REQUEST", f"Amazon Bedrock refused the request (HTTP {response.status_code}): "
+                           f"{redact(response.text[:300])}")
+    try:
+        data = response.json()
+        text = "".join(block.get("text", "") for block in data["output"]["message"]["content"] if isinstance(block, dict))
+        truncated = data.get("stopReason") in ("max_tokens", "model_context_window_exceeded")
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise GatewayError("BAD_RESPONSE", "Amazon Bedrock returned an unexpected payload") from exc
+    usage = data.get("usage") or {}
+    estimated = "inputTokens" not in usage
+    return Completion(text, int(usage.get("inputTokens") or _estimate_tokens(json.dumps(messages))),
+                      int(usage.get("outputTokens") or _estimate_tokens(text)), estimated, latency, model, truncated=truncated)
 
 
 TRUNCATED_HELP = ("the model reached its output limit of {limit} tokens before finishing its answer. Models that reason "
@@ -290,19 +373,20 @@ class Gateway:
             text = json.dumps(fake_complete(task.name, inputs))
             return Completion(text, _estimate_tokens(json.dumps(messages)), _estimate_tokens(text), True,
                               int((time.perf_counter() - started) * 1000), "fake-deterministic")
-        if provider.kind != "openai_compatible":
+        if provider.kind not in ("openai_compatible", "aws_bedrock"):
             raise GatewayError("MODEL_NOT_CONFIGURED", f"unknown provider kind '{provider.kind}'")
         egress = self._policy_for(provider)
+        call = _bedrock_complete if provider.kind == "aws_bedrock" else _openai_complete
         try:
             # Checked before any customer content leaves the process.
-            check_url(provider.base_url or "", egress)
+            check_url(bedrock_url(provider) if provider.kind == "aws_bedrock" else provider.base_url or "", egress)
         except EgressBlocked as exc:
             raise GatewayError("EGRESS_BLOCKED", exc.reason) from exc
         with _semaphore_lock:
             sem = _semaphores.setdefault(
                 provider.id, threading.BoundedSemaphore(int((provider.params or {}).get("max_concurrency", 4))))
         with sem:
-            return _openai_complete(provider, self._api_key(provider), egress, model=model, messages=messages,
+            return call(provider, self._api_key(provider), egress, model=model, messages=messages,
                                     temperature=policy.temperature, max_tokens=policy.max_tokens,
                                     timeout=policy.timeout_s)
 
@@ -367,11 +451,14 @@ class Gateway:
             add("capability", True, "SYNTHETIC provider: exercises the pipeline only; it is not a real evaluator.")
         else:
             try:
-                destination = check_url(provider.base_url or "", self._policy_for(provider))
+                destination = check_url(bedrock_url(provider) if provider.kind == "aws_bedrock" else provider.base_url or "",
+                                        self._policy_for(provider))
                 add("network_policy", True, f"destination class: {destination}; workspace is "
                     f"{'offline (local only)' if offline else 'connected'}")
             except EgressBlocked as exc:
                 ok = add("network_policy", False, f"{exc.reason}. Offline workspaces may only use local or allowlisted endpoints.")
+            except GatewayError as exc:
+                ok = add("network_policy", False, exc.message)
         if ok:
             nonce = uuid.uuid4().hex[:8]
             temp_policy = ModelRolePolicy(workspace_id=self.workspace_id, role="preflight", provider_id=provider.id,

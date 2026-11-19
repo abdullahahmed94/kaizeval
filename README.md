@@ -296,7 +296,7 @@ Exit code `0` passes, `1` means a quality gate failed, `2` is an operational err
 Action:
 
 ```yaml
-- uses: abdullahahmed94/kaizeval@v0.2.0
+- uses: abdullahahmed94/kaizeval@v0.3.0
   with:
     url: ${{ vars.KAIZEVAL_URL }}
     email: ${{ secrets.KAIZEVAL_EMAIL }}
@@ -311,8 +311,8 @@ Action:
 
 | Area | What you get |
 |---|---|
-| Agents | Generic HTTP and OpenAI-compatible connectors (black box); a candidate protocol for agents that can be safely patched, with `kaizeval.agentkit` to add it to your own agent in a few lines; capability discovery with reasons |
-| Models | Any OpenAI-compatible endpoint, local or hosted; one gateway for eight roles (generator, reference drafter, two judges, arbiter, root cause, optimizer, spec inference); preflight; adapts to endpoints that refuse optional request fields; budgets; per-role usage; no silent fallback |
+| Agents | Generic HTTP and OpenAI-compatible connectors (black box); built-in connectors for Amazon Bedrock agents, Amazon Bedrock AgentCore and Salesforce Agentforce ([cloud platforms](docs/CLOUD_PLATFORMS.md)); a candidate protocol for agents that can be safely patched, with `kaizeval.agentkit` to add it to your own agent in a few lines; capability discovery with reasons |
+| Models | Any OpenAI-compatible endpoint, local or hosted; Amazon Bedrock natively; one gateway for eight roles (generator, reference drafter, two judges, arbiter, root cause, optimizer, spec inference); preflight; adapts to endpoints that refuse optional request fields; budgets; per-role usage; no silent fallback |
 | Knowledge | PDF, DOCX, Markdown, text; versioned; every passage traceable to file, page or section and offsets |
 | Specification | From your requirements, inferred, or both; versioned; Review & Edit, Approve or Skip |
 | Tests | Written by 1 to 8 independent tester agents, each with its own angle; knowledge, citation, edge-case, multi-turn and unanswerable cases; language variants (needs a real model); import of approved Q&A; coverage report; stale-case detection when a document changes |
@@ -339,6 +339,7 @@ Recommendations, Optimization, Candidates, Audit, Workspace settings.
 | [Architecture](docs/ARCHITECTURE.md) | [Examples](examples/README.md) |
 | [Workflow, step by step](docs/WORKFLOW.md) | [API quickstart script](examples/api_quickstart.py) |
 | [REST API](docs/API.md) | [LLM Gateway](docs/LLM_GATEWAY.md) |
+| [Cloud platforms: AWS and Salesforce Agentforce](docs/CLOUD_PLATFORMS.md) | [Troubleshooting](docs/TROUBLESHOOTING.md) |
 | [Connector SDK](docs/CONNECTOR_SDK.md) | [Security notes](docs/SECURITY.md) |
 | [Validation against a real model](docs/REAL_MODEL_VALIDATION.md) | [Acceptance status](docs/MVP_ACCEPTANCE.md) |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | [Changelog](CHANGELOG.md) |

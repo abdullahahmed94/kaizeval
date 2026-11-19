@@ -69,7 +69,7 @@ nothing can be pulled inside such an environment:
 
 1. On a connected machine, build and save the images:
    `docker compose -f deploy/docker-compose.yml build` then
-   `docker save kaizeval:0.2.0 postgres:16-alpine nginx:alpine -o kaizeval-images.tar`
+   `docker save kaizeval:0.3.0 postgres:16-alpine nginx:alpine -o kaizeval-images.tar`
    (add `ollama/ollama:latest` if you use the `ollama` profile).
 2. Transfer the archive and the `deploy/` directory, then `docker load -i kaizeval-images.tar`.
 3. Provision model weights for your local model server out of band (for the `ollama` profile,
@@ -77,7 +77,7 @@ nothing can be pulled inside such an environment:
 4. Register the model with its internal address, for example `http://ollama:11434/v1`.
 
 For a pip-based air-gapped install, download the wheels on a connected machine
-(`pip download kaizeval-0.2.0-py3-none-any.whl -d wheels/`) and install with
+(`pip download kaizeval-0.3.0-py3-none-any.whl -d wheels/`) and install with
 `pip install --no-index --find-links wheels/ kaizeval`.
 
 ## 3. Configuration
