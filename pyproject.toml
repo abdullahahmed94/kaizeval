@@ -64,6 +64,7 @@ packages = ["src/kaizeval"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "docs", "README.md", "LICENSE", "NOTICE", "CHANGELOG.md"]
+exclude = ["docs/media"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

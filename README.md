@@ -131,6 +131,15 @@ then runs the complete journey against it and prints a login.
 > test, the deterministic checks measure its actual answers, the candidate is a real isolated
 > copy, and the baseline stays byte-identical. Connect a real model to get real judgments.
 
+## Watch the demo
+
+[![Demo video: the console from sign-up to the release decision](docs/media/kaizeval-demo-poster.jpg)](docs/media/kaizeval-demo.mp4)
+
+A five-minute narrated walk through the console (click the picture to play): creating a workspace,
+connecting a model and an agent, uploading documents, generating tests, reading the evaluation
+report, and deciding on the improved version. It was recorded against a small local model, so the
+numbers on screen are real judgments; the waiting time is cut out.
+
 ## What it looks like
 
 Screenshots of the bundled console running the demo. The purple banners are the SYNTHETIC label
